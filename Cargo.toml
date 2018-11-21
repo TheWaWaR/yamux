@@ -1,0 +1,6 @@
+[package]
+name = "yamux"
+version = "0.1.0"
+authors = ["Linfeng Qian <thewawar@gmail.com>"]
+
+[dependencies]
