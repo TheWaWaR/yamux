@@ -9,16 +9,19 @@ pub struct Header {
     length: u32,
 }
 
-// The type field is used to switch the frame message type. The following
-//     message types are supported:
+// The type field is used to switch the frame message type.
+// The following message types are supported:
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum Type {
-    // Used to transmit data. May transmit zero length payloads depending on the flags.
+    // Used to transmit data.
+    // May transmit zero length payloads depending on the flags.
     Data = 0x0,
-    // Used to updated the senders receive window size. This is used to implement per-session flow control.
+    // Used to updated the senders receive window size.
+    // This is used to implement per-session flow control.
     WindowUpdate = 0x1,
-    // Used to measure RTT. It can also be used to heart-beat and do keep-alives over TCP.
+    // Used to measure RTT.
+    // It can also be used to heart-beat and do keep-alives over TCP.
     Ping = 0x2,
     // Used to close a session.
     GoAway = 0x3,
@@ -27,13 +30,22 @@ pub enum Type {
 #[derive(Copy, Clone, Debug)]
 #[repr(u16)]
 pub enum Flag {
-    // SYN - Signals the start of a new stream. May be sent with a data or window update message. Also sent with a ping to indicate outbound.
+    // SYN - Signals the start of a new stream.
+    //   May be sent with a data or window update message.
+    //   Also sent with a ping to indicate outbound.
     Syn = 0x1,
-    // ACK - Acknowledges the start of a new stream. May be sent with a data or window update message. Also sent with a ping to indicate response.
+
+    // ACK - Acknowledges the start of a new stream.
+    //   May be sent with a data or window update message.
+    //   Also sent with a ping to indicate response.
     Ack = 0x2,
-    // FIN - Performs a half-close of a stream. May be sent with a data message or window update.
+
+    // FIN - Performs a half-close of a stream.
+    //   May be sent with a data message or window update.
     Fin = 0x4,
-    // RST - Reset a stream immediately. May be sent with a data or window update message.
+
+    // RST - Reset a stream immediately.
+    //   May be sent with a data or window update message.
     Rst = 0x8
 }
 
