@@ -1,11 +1,54 @@
-use bytes::Bytes;
+use std::io;
+use bytes::{Bytes, BytesMut};
+use tokio_codec::{Encoder, Decoder};
+
+use crate::{
+    PROTOCOL_VERSION,
+    StreamId,
+};
+
+pub struct Frame {
+    header: Header,
+    body: Option<Bytes>,
+}
+
+impl Frame {
+    pub fn new(ty: Type, flags: Flags, stream_id: StreamId, length: u32) -> Frame {
+        let version = PROTOCOL_VERSION;
+        let header = Header {version, ty, flags, stream_id, length};
+        Frame {
+            header,
+            body: None,
+        }
+    }
+
+    pub fn set_body(&mut self, body: Option<Bytes>) {
+        self.body = body
+    }
+
+    pub fn ty(&self) -> Type {
+        self.header.ty
+    }
+
+    pub fn stream_id(&self) -> StreamId {
+        self.header.stream_id
+    }
+
+    pub fn flags(&self) -> Flags {
+        self.header.flags
+    }
+
+    pub fn length(&self) -> u32 {
+        self.header.length
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Header {
     version: u8,
     ty: Type,
     flags: Flags,
-    stream_id: u32,
+    stream_id: StreamId,
     length: u32,
 }
 
@@ -49,14 +92,16 @@ pub enum Flag {
     Rst = 0x8
 }
 
-#[derive(Copy, Clone, Debug)]
+impl From<Flag> for Flags {
+    fn from(value: Flag) -> Flags {
+        Flags(value as u16)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Flags(u16);
 
 impl Flags {
-    pub fn new() -> Flags {
-        Flags(0)
-    }
-
     pub fn add(&mut self, flag: Flag) {
         self.0 |= flag as u16;
     }
@@ -87,4 +132,59 @@ pub enum GoAwayCode {
     ProtocolError = 0x1,
     // Internal error
     InternalError = 0x2,
+}
+
+pub struct FrameCodec {
+}
+
+impl FrameCodec {
+    pub fn new() -> FrameCodec {
+        FrameCodec {}
+    }
+}
+
+pub enum FrameEncodeError {
+    Io(io::Error)
+}
+
+pub enum FrameDecodeError {
+    Io(io::Error)
+}
+
+impl From<io::Error> for FrameDecodeError {
+    fn from(err: io::Error) -> Self {
+        FrameDecodeError::Io(err)
+    }
+}
+
+impl From<io::Error> for FrameEncodeError {
+    fn from(err: io::Error) -> Self {
+        FrameEncodeError::Io(err)
+    }
+}
+
+impl Decoder for FrameCodec {
+    type Item = Frame;
+    type Error = FrameDecodeError;
+
+    fn decode(
+        &mut self,
+        src: &mut BytesMut
+    ) -> Result<Option<Self::Item>, Self::Error> {
+        // TODO:
+        Ok(None)
+    }
+}
+
+impl Encoder for FrameCodec {
+    type Item = Frame;
+    type Error = FrameEncodeError;
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut BytesMut
+    ) -> Result<(), Self::Error> {
+        // TODO:
+        Ok(())
+    }
 }
