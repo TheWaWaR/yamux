@@ -21,27 +21,27 @@ use tokio_codec::{Framed};
 
 
 pub struct Session<T> {
-	  // remoteGoAway indicates the remote side does
-	  // not want futher connections. Must be first for alignment.
+    // remoteGoAway indicates the remote side does
+    // not want futher connections. Must be first for alignment.
     remote_go_away: bool,
 
-	  // localGoAway indicates that we should stop
-	  // accepting futher connections. Must be first for alignment.
+    // localGoAway indicates that we should stop
+    // accepting futher connections. Must be first for alignment.
     local_go_away: bool,
 
-	  // nextStreamID is the next stream we should
-	  // send. This depends if we are a client/server.
+    // nextStreamID is the next stream we should
+    // send. This depends if we are a client/server.
     next_stream_id: StreamId,
 
-	  // config holds our configuration
+    // config holds our configuration
     config: Config,
 
-	  // pings is used to track inflight pings
+    // pings is used to track inflight pings
     pings: FnvHashMap<u32, ()>,
     ping_id: u32,
 
     stream_buf: Vec<Stream>,
-	  // streams maps a stream id to a sender of stream,
+    // streams maps a stream id to a sender of stream,
     streams: FnvHashMap<StreamId, Sender<Frame>>,
     // inflight has an entry for any outgoing stream that has not yet been established.
     inflight: FnvHashMap<StreamId, Sender<Frame>>,
@@ -61,7 +61,7 @@ pub enum SessionType {
 }
 
 impl<T> Session<T>
-    where T: AsyncRead + AsyncWrite
+where T: AsyncRead + AsyncWrite
 {
     pub fn new(raw_stream: T, config: Config, ty: SessionType) -> Session<T> {
         let next_stream_id = match ty {
