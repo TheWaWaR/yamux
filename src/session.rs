@@ -2,15 +2,20 @@
 use crate::{
     StreamId,
     config::Config,
-    stream::{Stream, StreamState},
-    frame::{Frame, Header, Flags, FrameCodec},
+    stream::{Stream, StreamEvent, StreamState},
+    frame::{Frame, Type, Header, Flags, FrameCodec},
 };
 
 use std::io;
 
 use fnv::FnvHashMap;
-use channel::{self, Sender, Receiver};
-use futures::{Async, Poll};
+use channel::{self, Sender, Receiver, TryRecvError};
+use futures::{
+    Async,
+    Poll,
+    Sink,
+    Stream as FutureStream,
+};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_codec::{Framed};
 
@@ -41,17 +46,12 @@ pub struct Session<T> {
     // inflight has an entry for any outgoing stream that has not yet been established.
     inflight: FnvHashMap<StreamId, Sender<Frame>>,
 
-    // For receive frames from sub streams (for clone to new stream)
-    frame_sender: Sender<Frame>,
-    // For receive frames from sub streams
-    frame_receiver: Receiver<Frame>,
+    // For receive events from sub streams (for clone to new stream)
+    event_sender: Sender<StreamEvent>,
+    // For receive events from sub streams
+    event_receiver: Receiver<StreamEvent>,
 
-    // For receive state change from sub streams (for clone to new stream)
-    state_sender: Sender<(StreamId, StreamState)>,
-    // For receive state change from sub streams
-    state_receiver: Receiver<(StreamId, StreamState)>,
-
-    // Framed stream
+    // Framed low level raw stream
     framed_stream: Framed<T, FrameCodec>,
 }
 
@@ -68,8 +68,7 @@ impl<T> Session<T>
             SessionType::Client => 1,
             SessionType::Server => 2,
         };
-        let (frame_sender, frame_receiver) = channel::bounded(16);
-        let (state_sender, state_receiver) = channel::bounded(8);
+        let (event_sender, event_receiver) = channel::bounded(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::new());
 
         Session {
@@ -82,10 +81,8 @@ impl<T> Session<T>
             stream_buf: Vec::new(),
             streams: FnvHashMap::default(),
             inflight: FnvHashMap::default(),
-            frame_sender,
-            frame_receiver,
-            state_sender,
-            state_receiver,
+            event_sender,
+            event_receiver,
             framed_stream,
         }
     }
@@ -108,17 +105,77 @@ impl<T> Session<T>
         self.inflight.insert(next_id, sender);
         Stream::new(
             next_id,
-            self.frame_sender.clone(),
-            self.state_sender.clone(),
+            self.event_sender.clone(),
             receiver,
         )
     }
 
-    fn recv_from_raw_stream(&mut self) -> Poll<(), io::Error> {
+    fn handle_frame(&mut self, frame: Frame) {
+        match frame.ty() {
+            Type::Data | Type::WindowUpdate => {
+                self.handle_stream_message(frame);
+            }
+            Type::Ping => {
+                self.handle_ping(frame);
+            }
+            Type::GoAway => {
+                self.handle_go_away(frame);
+            }
+        }
+    }
+    // Send message to stream (Data/WindowUpdate)
+    fn handle_stream_message(&self, frame: Frame) {}
+    fn handle_ping(&mut self, frame: Frame) {}
+    fn handle_go_away(&mut self, frame: Frame) {}
+
+    // Receive frames from low level stream
+    fn recv_frames(&mut self) -> Poll<(), io::Error> {
+        loop {
+            match self.framed_stream.poll()? {
+                Async::Ready(Some(frame)) => {
+                    self.handle_frame(frame);
+                }
+                Async::Ready(None) => {
+                    return Ok(Async::Ready(()));
+                }
+                Async::NotReady => {
+                    break;
+                }
+            }
+        }
         Ok(Async::NotReady)
     }
 
-    fn recv_from_sub_streams(&mut self) {
+
+    fn handle_event(&mut self, event: StreamEvent) {
+        match event {
+            StreamEvent::SendFrame(frame) => {
+                // FIXME: poll_complete
+                self.framed_stream.start_send(frame);
+            }
+            StreamEvent::StateChanged((stream_id, state)) => {
+                match state {
+                    StreamState::Closed => {
+                    }
+                    StreamState::Established => {
+                    }
+                    _ => {
+                    }
+                }
+            }
+        }
+    }
+
+    // Receive events from sub streams
+    // TODO: should handle error
+    fn recv_events(&mut self) {
+        loop {
+            match self.event_receiver.try_recv() {
+                Ok(event) => self.handle_event(event),
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => {},
+            }
+        }
     }
 }
 

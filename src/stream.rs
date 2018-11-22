@@ -1,7 +1,7 @@
 
 use std::io;
 
-use channel::{Receiver, Sender};
+use channel::{Receiver, Sender, TryRecvError};
 use bytes::{BytesMut, Bytes};
 use futures::{Async, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -20,10 +20,8 @@ pub struct Stream {
     recv_window: u32,
     send_window: u32,
 
-    // Send frame to parent session
-    frame_sender: Sender<Frame>,
-    // Send state change to parent session
-    state_sender: Sender<(StreamId, StreamState)>,
+    // Send stream event to parent session
+    event_sender: Sender<StreamEvent>,
 
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
@@ -33,8 +31,7 @@ pub struct Stream {
 impl Stream {
     pub fn new(
         id: StreamId,
-        frame_sender: Sender<Frame>,
-        state_sender: Sender<(StreamId, StreamState)>,
+        event_sender: Sender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
     ) -> Stream {
         Stream {
@@ -42,8 +39,7 @@ impl Stream {
             send_window: INITIAL_STREAM_WINDOW,
             id,
             state: StreamState::Init,
-            frame_sender,
-            state_sender,
+            event_sender,
             frame_receiver,
         }
     }
@@ -62,7 +58,8 @@ impl Stream {
             StreamState::RemoteClosing => {
                 self.state = StreamState::Closed;
                 self.send_close();
-                if let Err(_) = self.state_sender.send((self.id, self.state)) {
+                let event = StreamEvent::StateChanged((self.id, self.state));
+                if let Err(_) = self.event_sender.send(event) {
                     self.session_gone();
                 }
             }
@@ -74,7 +71,8 @@ impl Stream {
         let mut flags = self.get_flags();
         flags.add(Flag::Fin);
         let frame = Frame::new(Type::WindowUpdate, flags, self.id, 0);
-        if let Err(_) = self.frame_sender.send(frame) {
+        let event = StreamEvent::SendFrame(frame);
+        if let Err(_) = self.event_sender.send(event) {
             self.session_gone();
         }
     }
@@ -94,6 +92,19 @@ impl Stream {
                 Flags::from(Flag::Ack)
             }
             _ => Flags::default()
+        }
+    }
+
+    fn handle_frame(&mut self, frame: Frame) {
+    }
+
+    fn recv_frames(&mut self) {
+        loop {
+            match self.frame_receiver.try_recv() {
+                Ok(frame) => self.handle_frame(frame),
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => {},
+            }
         }
     }
 }
@@ -120,6 +131,11 @@ impl AsyncWrite for Stream {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         Ok(Async::NotReady)
     }
+}
+
+pub enum StreamEvent {
+    SendFrame(Frame),
+    StateChanged((StreamId, StreamState)),
 }
 
 #[derive(Debug, Copy, Clone)]

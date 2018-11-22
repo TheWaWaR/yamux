@@ -143,29 +143,9 @@ impl FrameCodec {
     }
 }
 
-pub enum FrameEncodeError {
-    Io(io::Error)
-}
-
-pub enum FrameDecodeError {
-    Io(io::Error)
-}
-
-impl From<io::Error> for FrameDecodeError {
-    fn from(err: io::Error) -> Self {
-        FrameDecodeError::Io(err)
-    }
-}
-
-impl From<io::Error> for FrameEncodeError {
-    fn from(err: io::Error) -> Self {
-        FrameEncodeError::Io(err)
-    }
-}
-
 impl Decoder for FrameCodec {
     type Item = Frame;
-    type Error = FrameDecodeError;
+    type Error = io::Error;
 
     fn decode(
         &mut self,
@@ -178,7 +158,7 @@ impl Decoder for FrameCodec {
 
 impl Encoder for FrameCodec {
     type Item = Frame;
-    type Error = FrameEncodeError;
+    type Error = io::Error;
     fn encode(
         &mut self,
         item: Self::Item,
