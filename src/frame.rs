@@ -41,6 +41,10 @@ impl Frame {
     pub fn length(&self) -> u32 {
         self.header.length
     }
+
+    pub fn take_body(&mut self) -> Option<Bytes> {
+        self.body.take()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -110,7 +114,7 @@ impl Flags {
         self.0 ^= flag as u16;
     }
 
-    pub fn has(&self, flag: Flag) -> bool {
+    pub fn contains(&self, flag: Flag) -> bool {
         let flag_value = flag as u16;
         (self.0 & flag_value) == flag_value
     }
@@ -132,6 +136,17 @@ pub enum GoAwayCode {
     ProtocolError = 0x1,
     // Internal error
     InternalError = 0x2,
+}
+
+impl From<u32> for GoAwayCode {
+    fn from(value: u32) -> GoAwayCode {
+        match value {
+            0x0 => GoAwayCode::Normal,
+            0x1 => GoAwayCode::ProtocolError,
+            0x2 => GoAwayCode::InternalError,
+            _ => GoAwayCode::ProtocolError,
+        }
+    }
 }
 
 pub struct FrameCodec {

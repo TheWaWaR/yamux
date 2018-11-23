@@ -1,7 +1,7 @@
 
 use std::io;
 
-use channel::{Receiver, Sender, TryRecvError};
+use channel::{self, Receiver, Sender, TryRecvError};
 use bytes::{BytesMut, Bytes};
 use futures::{Async, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -19,6 +19,7 @@ pub struct Stream {
 
     recv_window: u32,
     send_window: u32,
+    data_buf: BytesMut,
 
     // Send stream event to parent session
     event_sender: Sender<StreamEvent>,
@@ -26,6 +27,7 @@ pub struct Stream {
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
     frame_receiver: Receiver<Frame>,
+
 }
 
 impl Stream {
@@ -33,12 +35,15 @@ impl Stream {
         id: StreamId,
         event_sender: Sender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
+        state: StreamState,
     ) -> Stream {
+        assert!(state == StreamState::Init || state == StreamState::SynReceived);
         Stream {
+            id,
+            state,
             recv_window: INITIAL_STREAM_WINDOW,
             send_window: INITIAL_STREAM_WINDOW,
-            id,
-            state: StreamState::Init,
+            data_buf: BytesMut::default(),
             event_sender,
             frame_receiver,
         }
@@ -67,18 +72,40 @@ impl Stream {
         }
     }
 
-    fn send_close(&mut self) {
-        let mut flags = self.get_flags();
-        flags.add(Flag::Fin);
-        let frame = Frame::new(Type::WindowUpdate, flags, self.id, 0);
+    fn send_frame(&mut self, frame: Frame) {
         let event = StreamEvent::SendFrame(frame);
         if let Err(_) = self.event_sender.send(event) {
             self.session_gone();
         }
     }
 
+    pub fn send_window_update(&mut self) {
+        let flags = self.get_flags();
+        // TODO calc delta
+        let delta = 0;
+        let frame = Frame::new(Type::WindowUpdate, flags, self.id, delta);
+        self.send_frame(frame);
+    }
+
+    fn send_data(&mut self, data: &[u8]) {
+        let flags = self.get_flags();
+        let mut frame = Frame::new(Type::Data, flags, self.id, data.len() as u32);
+        frame.set_body(Some(Bytes::from(data)));
+        self.send_frame(frame);
+    }
+
+    fn send_close(&mut self) {
+        let mut flags = self.get_flags();
+        flags.add(Flag::Fin);
+        let frame = Frame::new(Type::WindowUpdate, flags, self.id, 0);
+        self.send_frame(frame);
+    }
+
     // FIXME: what happened when parent session gone?
     fn session_gone(&mut self) {
+    }
+
+    fn process_flags(&mut self) {
     }
 
     fn get_flags(&mut self) -> Flags {
@@ -96,6 +123,24 @@ impl Stream {
     }
 
     fn handle_frame(&mut self, frame: Frame) {
+        match frame.ty() {
+            Type::WindowUpdate => {
+                self.handle_window_update(frame);
+            }
+            Type::Data => {
+                self.handle_data(frame);
+            }
+            _ => panic!("Stream can not handle frame type of {:?}", frame.ty()),
+        }
+    }
+
+    fn handle_window_update(&mut self, frame: Frame) {
+    }
+
+    fn handle_data(&mut self, mut frame: Frame) {
+        if let Some(data) = frame.take_body() {
+            self.data_buf.extend_from_slice(&data);
+        }
     }
 
     fn recv_frames(&mut self) {
@@ -111,16 +156,27 @@ impl Stream {
 
 impl io::Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.recv_frames();
         Ok(0)
     }
 }
 
 impl io::Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.recv_frames();
+        self.send_data(buf);
         Ok(0)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.recv_frames();
+        let (sender, receiver) = channel::bounded(1);
+        let event = StreamEvent::Flush((self.id, sender));
+        if let Err(_) = self.event_sender.send(event) {
+            self.session_gone();
+        } else {
+            let _ = receiver.recv();
+        }
         Ok(())
     }
 }
@@ -136,9 +192,11 @@ impl AsyncWrite for Stream {
 pub enum StreamEvent {
     SendFrame(Frame),
     StateChanged((StreamId, StreamState)),
+    // Flush stream's frames to remote stream, with a channel for sync
+    Flush((StreamId, Sender<()>))
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum StreamState {
     Init,
     SynSent,
