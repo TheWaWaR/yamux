@@ -142,7 +142,7 @@ pub enum Flag {
     //   Also sent with a ping to indicate response.
     Ack = 0x2,
 
-    // FIN - Performs a half-close of a stream.
+    // FIN (finish?) - Performs a half-close of a stream.
     //   May be sent with a data message or window update.
     Fin = 0x4,
 
