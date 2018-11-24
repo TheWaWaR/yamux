@@ -83,21 +83,20 @@ impl Stream {
         let flags = self.get_flags();
         // TODO calc delta
         let delta = 0;
-        let frame = Frame::new(Type::WindowUpdate, flags, self.id, delta);
+        let frame = Frame::new_window_update(flags, self.id, delta);
         self.send_frame(frame);
     }
 
     fn send_data(&mut self, data: &[u8]) {
         let flags = self.get_flags();
-        let mut frame = Frame::new(Type::Data, flags, self.id, data.len() as u32);
-        frame.set_body(Some(Bytes::from(data)));
+        let frame = Frame::new_data(flags, self.id, Bytes::from(data));
         self.send_frame(frame);
     }
 
     fn send_close(&mut self) {
         let mut flags = self.get_flags();
         flags.add(Flag::Fin);
-        let frame = Frame::new(Type::WindowUpdate, flags, self.id, 0);
+        let frame = Frame::new_window_update(flags, self.id, 0);
         self.send_frame(frame);
     }
 
@@ -137,8 +136,9 @@ impl Stream {
     fn handle_window_update(&mut self, frame: Frame) {
     }
 
-    fn handle_data(&mut self, mut frame: Frame) {
-        if let Some(data) = frame.take_body() {
+    fn handle_data(&mut self, frame: Frame) {
+        let (_, body) = frame.into_parts();
+        if let Some(data) = body {
             self.data_buf.extend_from_slice(&data);
         }
     }

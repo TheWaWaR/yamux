@@ -1,9 +1,13 @@
 use std::io;
-use bytes::{Bytes, BytesMut};
+
+use bytes::{Bytes, BytesMut, BufMut};
+use byteorder::{BigEndian, ByteOrder};
 use tokio_codec::{Encoder, Decoder};
 
 use crate::{
     PROTOCOL_VERSION,
+    RESERVED_STREAM_ID,
+    HEADER_SIZE,
     StreamId,
 };
 
@@ -13,17 +17,56 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(ty: Type, flags: Flags, stream_id: StreamId, length: u32) -> Frame {
-        let version = PROTOCOL_VERSION;
-        let header = Header {version, ty, flags, stream_id, length};
+    pub fn new_data(flags: Flags, stream_id: StreamId, body: Bytes) -> Frame {
         Frame {
-            header,
+            header: Header {
+                version: PROTOCOL_VERSION,
+                ty: Type::Data,
+                flags,
+                stream_id,
+                length: body.len() as u32,
+            },
+            body: Some(body),
+        }
+    }
+
+    pub fn new_window_update(flags: Flags, stream_id: StreamId, delta: u32) -> Frame {
+        Frame {
+            header: Header {
+                version: PROTOCOL_VERSION,
+                ty: Type::WindowUpdate,
+                flags,
+                stream_id,
+                length: delta,
+            },
             body: None,
         }
     }
 
-    pub fn set_body(&mut self, body: Option<Bytes>) {
-        self.body = body
+    pub fn new_ping(flags: Flags, ping_id: u32) -> Frame {
+        Frame {
+            header: Header {
+                version: PROTOCOL_VERSION,
+                ty: Type::Ping,
+                flags,
+                stream_id: RESERVED_STREAM_ID,
+                length: ping_id,
+            },
+            body: None,
+        }
+    }
+
+    pub fn new_go_away(reason: GoAwayCode) -> Frame {
+        Frame {
+            header: Header {
+                version: PROTOCOL_VERSION,
+                ty: Type::GoAway,
+                flags: Flags::default(),
+                stream_id: RESERVED_STREAM_ID,
+                length: reason as u32,
+            },
+            body: None,
+        }
     }
 
     pub fn ty(&self) -> Type {
@@ -42,8 +85,8 @@ impl Frame {
         self.header.length
     }
 
-    pub fn take_body(&mut self) -> Option<Bytes> {
-        self.body.take()
+    pub fn into_parts(self) -> (Header, Option<Bytes>) {
+        (self.header, self.body)
     }
 }
 
@@ -58,7 +101,7 @@ pub struct Header {
 
 // The type field is used to switch the frame message type.
 // The following message types are supported:
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Type {
     // Used to transmit data.
@@ -72,6 +115,18 @@ pub enum Type {
     Ping = 0x2,
     // Used to close a session.
     GoAway = 0x3,
+}
+
+impl Type {
+    pub fn try_from(value: u8) -> Option<Type> {
+        match value {
+            0x0 => Some(Type::Data),
+            0x1 => Some(Type::WindowUpdate),
+            0x2 => Some(Type::Ping),
+            0x3 => Some(Type::GoAway),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -149,13 +204,9 @@ impl From<u32> for GoAwayCode {
     }
 }
 
+#[derive(Default)]
 pub struct FrameCodec {
-}
-
-impl FrameCodec {
-    pub fn new() -> FrameCodec {
-        FrameCodec {}
-    }
+    unused_data_header: Option<Header>,
 }
 
 impl Decoder for FrameCodec {
@@ -166,8 +217,60 @@ impl Decoder for FrameCodec {
         &mut self,
         src: &mut BytesMut
     ) -> Result<Option<Self::Item>, Self::Error> {
-        // TODO:
-        Ok(None)
+        let header = match self.unused_data_header.take() {
+            Some(header) => header,
+            None if src.len() >= HEADER_SIZE => {
+                let header_data = src.split_to(HEADER_SIZE);
+
+                let version = header_data[0];
+                if version != PROTOCOL_VERSION {
+                    let err = io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("yamux.version={}", version),
+                    );
+                    return Err(err);
+                }
+                let ty_value = header_data[1];
+                let ty = match Type::try_from(ty_value) {
+                    Some(ty) => ty,
+                    None => {
+                        let err = io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("yamux.type={}", ty_value),
+                        );
+                        return Err(err);
+                    }
+                };
+
+                let flags = Flags(BigEndian::read_u16(&header_data[2..4]));
+                let stream_id = BigEndian::read_u32(&header_data[4..8]);
+                let length = BigEndian::read_u32(&header_data[8..12]);
+                Header {
+                    version,
+                    ty,
+                    flags,
+                    stream_id,
+                    length,
+                }
+            }
+            // Not enough data for decode header
+            None => return Ok(None)
+        };
+
+        let body = if header.ty == Type::Data  {
+            if src.len() < header.length as usize {
+                // Not enough data for decode body
+                self.unused_data_header = Some(header);
+                return Ok(None);
+            } else {
+                Some(Bytes::from(src.split_to(header.length as usize)))
+            }
+        } else {
+            // Not data frame
+            None
+        };
+
+        Ok(Some(Frame { header, body }))
     }
 }
 
@@ -179,7 +282,15 @@ impl Encoder for FrameCodec {
         item: Self::Item,
         dst: &mut BytesMut
     ) -> Result<(), Self::Error> {
-        // TODO:
+        let (header, body) = item.into_parts();
+        dst.put(header.version);
+        dst.put(header.ty as u8);
+        dst.put_u16_be(header.flags.value());
+        dst.put_u32_be(header.stream_id);
+        dst.put_u32_be(header.length);
+        if let Some(data) = body {
+            dst.put(data);
+        }
         Ok(())
     }
 }

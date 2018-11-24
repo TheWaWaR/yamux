@@ -78,7 +78,7 @@ where T: AsyncRead + AsyncWrite
             SessionType::Server => 2,
         };
         let (event_sender, event_receiver) = channel::bounded(32);
-        let framed_stream = Framed::new(raw_stream, FrameCodec::new());
+        let framed_stream = Framed::new(raw_stream, FrameCodec::default());
 
         Session {
             framed_stream,
@@ -116,12 +116,7 @@ where T: AsyncRead + AsyncWrite
 
     pub fn send_go_away(&mut self) {
         self.local_go_away = true;
-        let frame = Frame::new(
-            Type::GoAway,
-            Flags::default(),
-            RESERVED_STREAM_ID,
-            GoAwayCode::Normal as u32,
-        );
+        let frame = Frame::new_go_away(GoAwayCode::Normal);
         self.send_frame(frame);
     }
 
@@ -189,12 +184,7 @@ where T: AsyncRead + AsyncWrite
         if flags.contains(Flag::Syn) {
             // Send ping back
             let flags = Flags::from(Flag::Ack);
-            let frame = Frame::new(
-                Type::Ping,
-                flags,
-                RESERVED_STREAM_ID,
-                frame.length(),
-            );
+            let frame = Frame::new_ping(flags, frame.length());
             self.send_frame(frame);
         } else if flags.contains(Flag::Ack) {
             self.pings.remove(&frame.length());

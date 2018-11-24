@@ -1,5 +1,6 @@
 extern crate crossbeam_channel as channel;
 extern crate bytes;
+extern crate byteorder;
 extern crate fnv;
 extern crate futures;
 extern crate tokio_io;
@@ -21,6 +22,8 @@ pub const PROTOCOL_VERSION: u8 = 0;
 pub const INITIAL_STREAM_WINDOW: u32 = 256 * 1024;
 // The 0 ID is reserved to represent the session.
 pub const RESERVED_STREAM_ID: StreamId = 0;
+// The header is 12 bytes
+pub const HEADER_SIZE: usize = 12;
 
 // Default value for accept_backlog
 pub const DEFAULT_ACCEPT_BACKLOG: u32 = 256;
