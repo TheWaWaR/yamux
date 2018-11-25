@@ -16,6 +16,7 @@ use futures::{
 };
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_codec::{Framed};
+use tokio_timer::Interval;
 
 use crate::{
     StreamId,
@@ -72,6 +73,7 @@ pub struct Session<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
 
+    keepalive_future: Option<Interval>,
 }
 
 #[derive(Debug)]
@@ -90,6 +92,11 @@ where T: AsyncRead + AsyncWrite
         };
         let (event_sender, event_receiver) = channel(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
+        let keepalive_future = if config.enable_keepalive {
+            Some(Interval::new_interval(config.keepalive_interval))
+        } else {
+            None
+        };
 
         Session {
             framed_stream,
@@ -109,6 +116,7 @@ where T: AsyncRead + AsyncWrite
             pending_frames: VecDeque::default(),
             event_sender,
             event_receiver,
+            keepalive_future,
         }
     }
 
@@ -173,28 +181,10 @@ where T: AsyncRead + AsyncWrite
         }
     }
 
-    fn keep_alive(&mut self) -> Poll<(), io::Error> {
-        if self.is_dead() {
-            return Ok(Async::Ready(()));
-        }
-
-        let now = Instant::now();
-        let ping_at = match self.last_ping_at {
-            Some(ping_at) => {
-                if now >= ping_at + self.config.keepalive_interval {
-                    Some(now)
-                } else {
-                    None
-                }
-            },
-            None => Some(now),
-        };
-        if let Some(now) = ping_at {
-            let ping_id = try_ready!(self.send_ping(None));
-            debug!("[{:?}] sent keep_alive ping ({:?})", self.ty, ping_id);
-            self.pings.insert(ping_id, now);
-            self.last_ping_at = Some(now);
-        }
+    fn keep_alive(&mut self, ping_at: Instant) -> Poll<(), io::Error> {
+        let ping_id = try_ready!(self.send_ping(None));
+        debug!("[{:?}] sent keep_alive ping ({:?})", self.ty, ping_id);
+        self.pings.insert(ping_id, ping_at);
         Ok(Async::Ready(()))
     }
 
@@ -340,7 +330,6 @@ where T: AsyncRead + AsyncWrite
                     self.eof = true;
                 }
                 Ok(Async::NotReady) => {
-                    debug!("[{:?}] recv frames NotReady", self.ty);
                     return Ok(Async::NotReady);
                 }
                 Err(err) => {
@@ -393,7 +382,6 @@ where T: AsyncRead + AsyncWrite
                     unreachable!()
                 }
                 Ok(Async::NotReady) => {
-                    debug!("[{:?}] recv events NotReady", self.ty);
                     return Ok(Async::NotReady);
                 },
                 Err(()) => {
@@ -412,18 +400,38 @@ where T: AsyncRead + AsyncWrite
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        debug!("[{:?}] ---------------", self.ty);
         debug!("[{:?}] Session::poll()", self.ty);
         loop {
             if self.is_dead() {
                 return Ok(Async::Ready(None));
             }
 
-            if self.config.enable_keepalive {
-                self.keep_alive()?;
-            }
-
+            let mut keep_alive_not_ready = false;
             let mut recv_frames_not_ready = false;
             let mut recv_events_not_ready = false;
+
+            let ping_at = if let Some(ref mut fut) = self.keepalive_future {
+                match fut.poll() {
+                    Ok(Async::Ready(Some(ping_at))) => Some(ping_at),
+                    Ok(Async::Ready(None)) => None,
+                    Ok(Async::NotReady) => {
+                        keep_alive_not_ready = true;
+                        None
+                    },
+                    Err(_) => None
+                }
+            } else {
+                None
+            };
+            if let Some(ping_at) = ping_at {
+                // TODO: Handle not ready
+                if self.keep_alive(ping_at)? == Async::NotReady {
+                    keep_alive_not_ready = true;
+                }
+            }
+            debug!("[{:?}] keep_alive_not_ready = {}", self.ty, keep_alive_not_ready);
+
             match self.recv_frames()? {
                 Async::Ready(_) => {},
                 Async::NotReady => {
@@ -444,7 +452,10 @@ where T: AsyncRead + AsyncWrite
                 return Ok(Async::Ready(Some(stream)));
             }
 
-            if recv_frames_not_ready && recv_events_not_ready {
+            if keep_alive_not_ready
+                || recv_frames_not_ready
+                || recv_events_not_ready
+            {
                 return Ok(Async::NotReady);
             }
 

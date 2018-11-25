@@ -3,8 +3,10 @@ extern crate bytes;
 extern crate byteorder;
 extern crate fnv;
 extern crate futures;
+extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_codec;
+extern crate tokio_timer;
 extern crate log;
 
 pub mod config;
