@@ -56,8 +56,6 @@ pub struct Session<T> {
     // pings is used to track inflight pings
     pings: BTreeMap<u32, Instant>,
     ping_id: u32,
-    // Last ping time
-    last_ping_at: Option<Instant>,
 
     // streams maps a stream id to a sender of stream,
     streams: FnvHashMap<StreamId, Sender<Frame>>,
@@ -109,7 +107,6 @@ where T: AsyncRead + AsyncWrite
             config,
             pings: BTreeMap::default(),
             ping_id: 0,
-            last_ping_at: None,
             streams: FnvHashMap::default(),
             inflight: FnvHashSet::default(),
             pending_streams: VecDeque::default(),
@@ -267,6 +264,7 @@ where T: AsyncRead + AsyncWrite
                 let flags = Flags::from(Flag::Rst);
                 let frame = Frame::new_window_update(flags, stream_id, 0);
                 self.send_frame(frame)?;
+                debug!("[{:?}] local go away send Reset to remote stream_id={}", self.ty, stream_id);
                 // TODO: should report error?
                 return Ok(());
             }
@@ -284,6 +282,7 @@ where T: AsyncRead + AsyncWrite
             }
         };
         if disconnected {
+            debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
             self.streams.remove(&stream_id);
         }
         Ok(())
@@ -406,6 +405,8 @@ where T: AsyncRead + AsyncWrite
         println!("\n\n------------------------------");
         debug!("[{:?}] Session::poll()", self.ty);
         loop {
+            // FIXME: Optmize this loop (use futures channel ?)
+
             if self.is_dead() {
                 return Ok(Async::Ready(None));
             }

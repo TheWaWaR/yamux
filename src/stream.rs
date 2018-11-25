@@ -65,7 +65,7 @@ impl StreamHandle {
     pub fn recv_window(&self) -> u32 {self.recv_window}
     pub fn send_window(&self) -> u32 {self.send_window}
 
-    pub fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<(), Error> {
         match self.state {
             StreamState::SynSent
                 | StreamState::SynReceived
@@ -241,6 +241,22 @@ impl StreamHandle {
 impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         // TODO: error handling
+        // TODO: check stream state
+        match self.state {
+            StreamState::LocalClosing
+                | StreamState::RemoteClosing
+                | StreamState::Closed =>
+            {
+                debug!("closed(EOF)");
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            StreamState::Reset => {
+                debug!("connection reset");
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
+            _ => {}
+        }
+
         self.recv_frames();
         let n = ::std::cmp::min(buf.len(), self.data_buf.len());
         let b = self.data_buf.split_to(n);
@@ -287,13 +303,7 @@ impl AsyncRead for StreamHandle {}
 impl AsyncWrite for StreamHandle {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        let frame = Frame::new_window_update(
-            Flags::from(Flag::Rst),
-            self.id,
-            0
-        );
-        self.send_frame(frame);
-        self.recv_frames();
+        self.close();
         Ok(Async::Ready(()))
     }
 }

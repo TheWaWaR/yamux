@@ -6,6 +6,7 @@ extern crate env_logger;
 extern crate log;
 
 use std::time::Duration;
+use std::io::{Write, Read};
 use std::thread;
 
 use yamux::{
@@ -16,6 +17,7 @@ use yamux::{
 use futures::Stream;
 use futures::Future;
 use tokio::io::{copy, AsyncRead, AsyncWrite};
+use tokio::io as tokio_io;
 use tokio::net::TcpListener;
 use log::{error, warn, info, debug, trace};
 
@@ -44,10 +46,19 @@ fn run_server() {
             let fut = session
                 .for_each(|stream| {
                     info!("Server accept a stream from client: id={}", stream.id());
-                    Ok(())
+                    tokio_io::read_exact(stream, [0u8; 3])
+                        .and_then(|(stream, data)| {
+                            info!("read data: {:?}", data);
+                            Ok(stream)
+                        })
+                        .and_then(|mut stream| {
+                            info!("read again: {:?}", stream.read(&mut [0u8; 2]));
+                            Ok(stream)
+                        })
+                        .map(|_| ())
                 })
                 .map_err(|err| {
-                    println!("server stream error: {:}", err);
+                    error!("server stream error: {:}", err);
                     ()
                 });
 
@@ -64,25 +75,29 @@ fn run_client() {
     let addr = "127.0.0.1:12345".parse().unwrap();
     let socket = TcpStream::connect(&addr)
         .and_then(|sock| {
-            info!("connected to server: {:?}", sock.peer_addr());
+            info!("[client] connected to server: {:?}", sock.peer_addr());
             let mut session = Session::new_client(sock, Config::default());
 
             match session.open_stream() {
-                Ok(stream) => {
-                    info!("success open stream from client: id={}", stream.id());
+                Ok(mut stream) => {
+                    info!("[client] send 'abc' to remote");
+                    stream.write(b"abc").unwrap();
+                    info!("[client] shutdown stream id={}", stream.id());
+                    stream.shutdown().unwrap();
+                    info!("[client] success open stream: id={}", stream.id());
                 }
                 Err(err) => {
-                    error!("client open stream error: {:?}", err);
+                    error!("[client] open stream error: {:?}", err);
                 }
             }
             session
                 .for_each(|stream| {
-                    info!("client accept a stream from server: id={}", stream.id());
+                    info!("[client] accept a stream from server: id={}", stream.id());
                     Ok(())
                 })
         })
         .map_err(|err| {
-            println!("client error: {:?}", err);
+            error!("[client] error: {:?}", err);
             ()
         });
     tokio::run(socket);

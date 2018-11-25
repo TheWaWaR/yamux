@@ -261,7 +261,7 @@ impl Decoder for FrameCodec {
             }
             // Not enough data for decode header
             None => {
-                debug!("not enough data for decode header");
+                trace!("not enough data for decode header");
                 return Ok(None);
             }
         };
@@ -269,7 +269,7 @@ impl Decoder for FrameCodec {
         let body = if header.ty == Type::Data  {
             if src.len() < header.length as usize {
                 // Not enough data for decode body
-                debug!("not enough data for decode body");
+                trace!("not enough data for decode body");
                 self.unused_data_header = Some(header);
                 return Ok(None);
             } else {
@@ -301,7 +301,7 @@ impl Encoder for FrameCodec {
         if let Some(data) = body {
             dst.put(data);
         }
-        debug!("encode item: length={}", dst.len());
+        trace!("encode item: length={}", dst.len());
         Ok(())
     }
 }
