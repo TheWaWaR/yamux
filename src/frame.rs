@@ -11,6 +11,8 @@ use crate::{
     StreamId,
 };
 
+// TODO remove Clone later
+#[derive(Debug, Clone)]
 pub struct Frame {
     header: Header,
     body: Option<Bytes>,

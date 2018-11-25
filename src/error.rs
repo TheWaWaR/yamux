@@ -1,4 +1,5 @@
 
+#[derive(Debug)]
 pub enum Error {
     // InvalidVersion means we received a frame with an
     // invalid version

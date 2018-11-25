@@ -1,4 +1,4 @@
-extern crate crossbeam_channel as channel;
+// extern crate crossbeam_channel as channel;
 extern crate bytes;
 extern crate byteorder;
 extern crate fnv;

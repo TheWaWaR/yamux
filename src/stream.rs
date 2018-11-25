@@ -1,10 +1,17 @@
 
 use std::io;
 
-use channel::{self, Receiver, Sender, TryRecvError};
 use bytes::{BytesMut, Bytes};
-use futures::{Async, Poll};
+use futures::{
+    Async,
+    Poll,
+    Stream,
+    Future,
+    sync::oneshot,
+    sync::mpsc::{channel, Sender, Receiver},
+};
 use tokio_io::{AsyncRead, AsyncWrite};
+use log::{error, warn, info, debug, trace};
 
 use crate::{
     StreamId,
@@ -13,7 +20,7 @@ use crate::{
 };
 
 
-pub struct Stream {
+pub struct StreamHandle {
     id: StreamId,
     state: StreamState,
 
@@ -31,7 +38,7 @@ pub struct Stream {
 
 }
 
-impl Stream {
+impl StreamHandle {
     pub fn new(
         id: StreamId,
         event_sender: Sender<StreamEvent>,
@@ -39,9 +46,9 @@ impl Stream {
         state: StreamState,
         recv_window_size: u32,
         send_window_size: u32,
-    ) -> Stream {
+    ) -> StreamHandle {
         assert!(state == StreamState::Init || state == StreamState::SynReceived);
-        Stream {
+        StreamHandle {
             id,
             state,
             max_recv_window: recv_window_size,
@@ -79,7 +86,9 @@ impl Stream {
     }
 
     fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
-        self.event_sender.send(event).map_err(|_| Error::SessionShutdown)
+        debug!("[{}] StreamHandle.send_event({:?})", self.id, event);
+        // TODO: should handle send error
+        self.event_sender.try_send(event).map_err(|_| Error::SessionShutdown)
     }
 
     fn send_frame(&mut self, frame: Frame) -> Result<(), Error> {
@@ -165,6 +174,7 @@ impl Stream {
     }
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), Error> {
+        debug!("[{}] StreamHandle.handle_frame({:?})", self.id, frame);
         match frame.ty() {
             Type::WindowUpdate => {
                 self.handle_window_update(frame)?;
@@ -215,33 +225,35 @@ impl Stream {
                 _ => {}
             }
 
-            match self.frame_receiver.try_recv() {
-                Ok(frame) => self.handle_frame(frame)?,
-                Err(TryRecvError::Empty) => {
-                    return Ok(Async::NotReady);
-                },
-                Err(TryRecvError::Disconnected) => {
+            match self.frame_receiver.poll().map_err(|()| Error::SessionShutdown)? {
+                Async::Ready(Some(frame)) => self.handle_frame(frame)?,
+                Async::Ready(None) => {
                     return Err(Error::SessionShutdown);
                 },
+                Async::NotReady => {
+                    return Ok(Async::NotReady);
+                }
             }
         }
     }
 }
 
-impl io::Read for Stream {
+impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         // TODO: error handling
         self.recv_frames();
         let n = ::std::cmp::min(buf.len(), self.data_buf.len());
         let b = self.data_buf.split_to(n);
+        debug!("[{}] StreamHandle.read({})", self.id, n);
         buf.copy_from_slice(&b);
         self.send_window_update();
         Ok(n)
     }
 }
 
-impl io::Write for Stream {
+impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        debug!("[{}] StreamHandle.write({:?})", self.id, buf);
         // TODO: error handling
         self.recv_frames();
         if self.send_window == 0 {
@@ -255,24 +267,26 @@ impl io::Write for Stream {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        debug!("[{}] StreamHandle.flush()", self.id);
         // TODO: error handling
         self.recv_frames();
-        let (sender, receiver) = channel::bounded(1);
+        let (sender, receiver) = oneshot::channel();
         let event = StreamEvent::Flush((self.id, sender));
         match self.send_event(event) {
             Err(_) => Err(io::Error::new(io::ErrorKind::ConnectionReset, "")),
             Ok(()) => {
-                let _ = receiver.recv();
+                let _ = receiver.wait();
                 Ok(())
             }
         }
     }
 }
 
-impl AsyncRead for Stream {}
+impl AsyncRead for StreamHandle {}
 
-impl AsyncWrite for Stream {
+impl AsyncWrite for StreamHandle {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
+        debug!("[{}] StreamHandle.shutdown()", self.id);
         let frame = Frame::new_window_update(
             Flags::from(Flag::Rst),
             self.id,
@@ -284,11 +298,12 @@ impl AsyncWrite for Stream {
     }
 }
 
+#[derive(Debug)]
 pub enum StreamEvent {
     SendFrame(Frame),
     StateChanged((StreamId, StreamState)),
     // Flush stream's frames to remote stream, with a channel for sync
-    Flush((StreamId, Sender<()>))
+    Flush((StreamId, oneshot::Sender<()>))
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

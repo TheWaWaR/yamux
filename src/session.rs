@@ -2,15 +2,17 @@ use std::io;
 use std::time::Instant;
 use std::collections::{VecDeque, BTreeMap};
 
+use log::{error, warn, info, debug, trace};
 use fnv::{FnvHashMap, FnvHashSet};
-use channel::{self, Sender, Receiver, TryRecvError};
 use futures::{
     try_ready,
+    task,
     Async,
     AsyncSink,
     Poll,
     Sink,
-    Stream as FutureStream,
+    Stream,
+    sync::mpsc::{channel, Sender, Receiver},
 };
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_codec::{Framed};
@@ -19,7 +21,7 @@ use crate::{
     StreamId,
     error::Error,
     config::Config,
-    stream::{Stream, StreamEvent, StreamState},
+    stream::{StreamHandle, StreamEvent, StreamState},
     frame::{Frame, Type, Flags, Flag, GoAwayCode, FrameCodec},
 };
 
@@ -45,6 +47,7 @@ pub struct Session<T> {
     // nextStreamID is the next stream we should
     // send. This depends if we are a client/server.
     next_stream_id: StreamId,
+    ty: SessionType,
 
     // config holds our configuration
     config: Config,
@@ -59,8 +62,8 @@ pub struct Session<T> {
     streams: FnvHashMap<StreamId, Sender<Frame>>,
     // inflight has an entry for any outgoing stream that has not yet been established.
     inflight: FnvHashSet<StreamId>,
-    // The Stream not yet been polled
-    pending_streams: VecDeque<Stream>,
+    // The StreamHandle not yet been polled
+    pending_streams: VecDeque<StreamHandle>,
 
     pending_frames: VecDeque<Frame>,
 
@@ -71,6 +74,7 @@ pub struct Session<T> {
 
 }
 
+#[derive(Debug)]
 pub enum SessionType {
     Client,
     Server,
@@ -84,7 +88,7 @@ where T: AsyncRead + AsyncWrite
             SessionType::Client => 1,
             SessionType::Server => 2,
         };
-        let (event_sender, event_receiver) = channel::bounded(32);
+        let (event_sender, event_receiver) = channel(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
 
         Session {
@@ -94,6 +98,7 @@ where T: AsyncRead + AsyncWrite
             remote_go_away: false,
             local_go_away: false,
             next_stream_id,
+            ty,
             config,
             pings: BTreeMap::default(),
             ping_id: 0,
@@ -156,7 +161,7 @@ where T: AsyncRead + AsyncWrite
         self.send_frame(frame)
     }
 
-    pub fn open_stream(&mut self) -> Result<Stream, Error> {
+    pub fn open_stream(&mut self) -> Result<StreamHandle, Error> {
         if self.is_dead() {
             Err(Error::SessionShutdown)
         } else if self.remote_go_away {
@@ -186,13 +191,14 @@ where T: AsyncRead + AsyncWrite
         };
         if let Some(now) = ping_at {
             let ping_id = try_ready!(self.send_ping(None));
+            debug!("[{:?}] sent keep_alive ping ({:?})", self.ty, ping_id);
             self.pings.insert(ping_id, now);
             self.last_ping_at = Some(now);
         }
         Ok(Async::Ready(()))
     }
 
-    fn create_stream(&mut self, stream_id: Option<StreamId>) -> Stream {
+    fn create_stream(&mut self, stream_id: Option<StreamId>) -> StreamHandle {
         let (stream_id, state) = match stream_id {
             Some(stream_id) => {
                 (stream_id, StreamState::SynReceived)
@@ -203,9 +209,9 @@ where T: AsyncRead + AsyncWrite
                 (next_id, StreamState::Init)
             }
         };
-        let (frame_sender, frame_receiver) = channel::bounded(8);
+        let (frame_sender, frame_receiver) = channel(8);
         self.streams.insert(stream_id, frame_sender);
-        let mut stream = Stream::new(
+        let mut stream = StreamHandle::new(
             stream_id,
             self.event_sender.clone(),
             frame_receiver,
@@ -213,30 +219,41 @@ where T: AsyncRead + AsyncWrite
             self.config.max_stream_window_size,
             self.config.max_stream_window_size,
         );
-        stream.send_window_update();
+        if let Err(err) = stream.send_window_update() {
+            debug!("[{:?}] stream.send_window_update error={:?}", self.ty, err);
+        }
         stream
     }
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
+        debug!("[{:?}] Session::send_frame({:?})", self.ty, frame);
         self.pending_frames.push_back(frame);
         while let Some(frame) = self.pending_frames.pop_front() {
             if self.is_dead() {
                 break;
             }
 
-            match self.framed_stream.start_send(frame) {
+            match self.framed_stream.start_send(frame.clone()) {
                 Ok(AsyncSink::NotReady(frame)) => {
+                    debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.pending_frames.push_front(frame);
                     return Ok(Async::NotReady)
                 }
-                Ok(AsyncSink::Ready) => {},
-                Err(err) => return Err(err)
+                Ok(AsyncSink::Ready) => {
+                    debug!("[{:?}] framed_stream sent, frame: {:?}", self.ty, frame);
+                },
+                Err(err) => {
+                    debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
+                    return Err(err);
+                }
             }
         }
+        debug!("[{:?}] Session::send_frame() finished", self.ty);
         Ok(Async::Ready(()))
     }
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), io::Error> {
+        debug!("[{:?}] Session::handle_frame({:?})", self.ty, frame);
         match frame.ty() {
             Type::Data | Type::WindowUpdate => {
                 self.handle_stream_message(frame)?;
@@ -262,12 +279,14 @@ where T: AsyncRead + AsyncWrite
                 // TODO: should report error?
                 return Ok(());
             }
+            debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
             let stream = self.create_stream(Some(stream_id));
             self.pending_streams.push_back(stream);
         }
         let disconnected = {
-            if let Some(frame_sender) = self.streams.get(&stream_id) {
-                frame_sender.send(frame).is_err()
+            if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
+                // TODO: handle error
+                frame_sender.try_send(frame).is_err()
             } else {
                 // TODO: stream already closed ?
                 false
@@ -313,15 +332,27 @@ where T: AsyncRead + AsyncWrite
                 return Ok(Async::Ready(()));
             }
 
-            if let Some(frame) = try_ready!(self.framed_stream.poll()) {
-                self.handle_frame(frame)?;
-            } else {
-                self.eof = true;
+            match self.framed_stream.poll() {
+                Ok(Async::Ready(Some(frame))) => {
+                    self.handle_frame(frame)?;
+                }
+                Ok(Async::Ready(None)) => {
+                    self.eof = true;
+                }
+                Ok(Async::NotReady) => {
+                    debug!("[{:?}] recv frames NotReady", self.ty);
+                    return Ok(Async::NotReady);
+                }
+                Err(err) => {
+                    warn!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
+                    return Err(err);
+                }
             }
         }
     }
 
     fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
+        debug!("[{:?}] Session::handle_event({:?})", self.ty, event);
         match event {
             StreamEvent::SendFrame(frame) => {
                 self.send_frame(frame)?;
@@ -354,15 +385,19 @@ where T: AsyncRead + AsyncWrite
                 return Ok(Async::Ready(()));
             }
 
-            match self.event_receiver.try_recv() {
-                Ok(event) => self.handle_event(event)?,
-                Err(TryRecvError::Empty) => {
-                    return Ok(Async::NotReady);
-                },
-                Err(TryRecvError::Disconnected) => {
+            match self.event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_event(event)?,
+                Ok(Async::Ready(None)) => {
                     // Since session hold one event sender,
                     // the channel can not be disconnected.
                     unreachable!()
+                }
+                Ok(Async::NotReady) => {
+                    debug!("[{:?}] recv events NotReady", self.ty);
+                    return Ok(Async::NotReady);
+                },
+                Err(()) => {
+                    // TODO: When would happend?
                 },
             }
         }
@@ -370,13 +405,14 @@ where T: AsyncRead + AsyncWrite
 }
 
 
-impl<T> futures::Stream for Session<T>
+impl<T> Stream for Session<T>
 where T: AsyncRead + AsyncWrite
 {
-    type Item = Stream;
+    type Item = StreamHandle;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        debug!("[{:?}] Session::poll()", self.ty);
         loop {
             if self.is_dead() {
                 return Ok(Async::Ready(None));
@@ -386,13 +422,32 @@ where T: AsyncRead + AsyncWrite
                 self.keep_alive()?;
             }
 
-            try_ready!(self.recv_frames());
+            let mut recv_frames_not_ready = false;
+            let mut recv_events_not_ready = false;
+            match self.recv_frames()? {
+                Async::Ready(_) => {},
+                Async::NotReady => {
+                    debug!("[{:?}] recv_frames NotReady", self.ty);
+                    recv_frames_not_ready = true;
+                }
+            }
             // Ignore Async::NotReady from recv_events()
-            self.recv_events()?;
+            match self.recv_events()? {
+                Async::Ready(_) => {},
+                Async::NotReady => {
+                    debug!("[{:?}] recv_events NotReady", self.ty);
+                    recv_events_not_ready = true;
+                }
+            }
 
             if let Some(stream) = self.pending_streams.pop_front() {
                 return Ok(Async::Ready(Some(stream)));
             }
+
+            if recv_frames_not_ready && recv_events_not_ready {
+                return Ok(Async::NotReady);
+            }
+
         }
     }
 }

@@ -12,3 +12,7 @@ futures = "0.1"
 tokio-codec = "0.1"
 tokio-io = "0.1"
 log = "0.4"
+
+[dev-dependencies]
+tokio = "0.1"
+env_logger = "0.6"
