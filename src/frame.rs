@@ -3,7 +3,7 @@ use std::io;
 use bytes::{Bytes, BytesMut, BufMut};
 use byteorder::{BigEndian, ByteOrder};
 use tokio_codec::{Encoder, Decoder};
-use log::{error, warn, info, debug, trace};
+use log::{trace};
 
 use crate::{
     PROTOCOL_VERSION,
@@ -13,7 +13,7 @@ use crate::{
 };
 
 // TODO remove Clone later
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Frame {
     header: Header,
     body: Option<Bytes>,
@@ -259,7 +259,6 @@ impl Decoder for FrameCodec {
                     length,
                 }
             }
-            // Not enough data for decode header
             None => {
                 trace!("not enough data for decode header");
                 return Ok(None);
@@ -268,7 +267,6 @@ impl Decoder for FrameCodec {
 
         let body = if header.ty == Type::Data  {
             if src.len() < header.length as usize {
-                // Not enough data for decode body
                 trace!("not enough data for decode body");
                 self.unused_data_header = Some(header);
                 return Ok(None);

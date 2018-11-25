@@ -8,10 +8,10 @@ use futures::{
     Stream,
     Future,
     sync::oneshot,
-    sync::mpsc::{channel, Sender, Receiver},
+    sync::mpsc::{Sender, Receiver},
 };
 use tokio_io::{AsyncRead, AsyncWrite};
-use log::{error, warn, info, debug, trace};
+use log::{debug, trace};
 
 use crate::{
     StreamId,

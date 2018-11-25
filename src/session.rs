@@ -220,15 +220,13 @@ where T: AsyncRead + AsyncWrite
                 break;
             }
 
-            match self.framed_stream.start_send(frame.clone()) {
+            match self.framed_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.pending_frames.push_front(frame);
                     return Ok(Async::NotReady)
                 }
-                Ok(AsyncSink::Ready) => {
-                    // debug!("[{:?}] framed_stream sent, frame: {:?}", self.ty, frame);
-                },
+                Ok(AsyncSink::Ready) => {},
                 Err(err) => {
                     debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
                     return Err(err);
@@ -402,8 +400,7 @@ where T: AsyncRead + AsyncWrite
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        println!("\n\n------------------------------");
-        debug!("[{:?}] Session::poll()", self.ty);
+        debug!(">> [{:?}] Session::poll()", self.ty);
         loop {
             // FIXME: Optmize this loop (use futures channel ?)
 
