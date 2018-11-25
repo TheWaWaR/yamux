@@ -183,7 +183,7 @@ where T: AsyncRead + AsyncWrite
 
     fn keep_alive(&mut self, ping_at: Instant) -> Poll<(), io::Error> {
         let ping_id = try_ready!(self.send_ping(None));
-        debug!("[{:?}] sent keep_alive ping ({:?})", self.ty, ping_id);
+        debug!("[{:?}] sent keep_alive ping (id={:?})", self.ty, ping_id);
         self.pings.insert(ping_id, ping_at);
         Ok(Async::Ready(()))
     }
@@ -230,7 +230,7 @@ where T: AsyncRead + AsyncWrite
                     return Ok(Async::NotReady)
                 }
                 Ok(AsyncSink::Ready) => {
-                    debug!("[{:?}] framed_stream sent, frame: {:?}", self.ty, frame);
+                    // debug!("[{:?}] framed_stream sent, frame: {:?}", self.ty, frame);
                 },
                 Err(err) => {
                     debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
@@ -238,6 +238,7 @@ where T: AsyncRead + AsyncWrite
                 }
             }
         }
+        self.framed_stream.poll_complete()?;
         debug!("[{:?}] Session::send_frame() finished", self.ty);
         Ok(Async::Ready(()))
     }
@@ -322,6 +323,7 @@ where T: AsyncRead + AsyncWrite
                 return Ok(Async::Ready(()));
             }
 
+            debug!("[{:?}] poll from framed_stream", self.ty);
             match self.framed_stream.poll() {
                 Ok(Async::Ready(Some(frame))) => {
                     self.handle_frame(frame)?;
@@ -330,6 +332,7 @@ where T: AsyncRead + AsyncWrite
                     self.eof = true;
                 }
                 Ok(Async::NotReady) => {
+                    debug!("[{:?}] poll framed_stream NotReady", self.ty);
                     return Ok(Async::NotReady);
                 }
                 Err(err) => {
@@ -343,7 +346,7 @@ where T: AsyncRead + AsyncWrite
     fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
         debug!("[{:?}] Session::handle_event({:?})", self.ty, event);
         match event {
-            StreamEvent::SendFrame(frame) => {
+            StreamEvent::Frame(frame) => {
                 self.send_frame(frame)?;
             }
             StreamEvent::StateChanged((stream_id, state)) => {
@@ -400,7 +403,7 @@ where T: AsyncRead + AsyncWrite
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        debug!("[{:?}] ---------------", self.ty);
+        println!("\n\n------------------------------");
         debug!("[{:?}] Session::poll()", self.ty);
         loop {
             if self.is_dead() {

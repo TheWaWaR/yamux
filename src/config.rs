@@ -7,7 +7,7 @@ pub const INITIAL_STREAM_WINDOW: u32 = 256 * 1024;
 pub const DEFAULT_ACCEPT_BACKLOG: usize = 256;
 pub const DEFAULT_MAX_STREAM_COUNT: usize = 65535;
 // pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
+pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(6);
 pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Config {

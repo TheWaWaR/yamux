@@ -3,6 +3,7 @@ use std::io;
 use bytes::{Bytes, BytesMut, BufMut};
 use byteorder::{BigEndian, ByteOrder};
 use tokio_codec::{Encoder, Decoder};
+use log::{error, warn, info, debug, trace};
 
 use crate::{
     PROTOCOL_VERSION,
@@ -219,6 +220,9 @@ impl Decoder for FrameCodec {
         &mut self,
         src: &mut BytesMut
     ) -> Result<Option<Self::Item>, Self::Error> {
+        if src.is_empty() {
+            return Ok(None);
+        }
         let header = match self.unused_data_header.take() {
             Some(header) => header,
             None if src.len() >= HEADER_SIZE => {
@@ -256,12 +260,16 @@ impl Decoder for FrameCodec {
                 }
             }
             // Not enough data for decode header
-            None => return Ok(None)
+            None => {
+                debug!("not enough data for decode header");
+                return Ok(None);
+            }
         };
 
         let body = if header.ty == Type::Data  {
             if src.len() < header.length as usize {
                 // Not enough data for decode body
+                debug!("not enough data for decode body");
                 self.unused_data_header = Some(header);
                 return Ok(None);
             } else {
@@ -293,6 +301,7 @@ impl Encoder for FrameCodec {
         if let Some(data) = body {
             dst.put(data);
         }
+        debug!("encode item: length={}", dst.len());
         Ok(())
     }
 }

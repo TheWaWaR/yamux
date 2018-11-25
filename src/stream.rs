@@ -92,7 +92,7 @@ impl StreamHandle {
     }
 
     fn send_frame(&mut self, frame: Frame) -> Result<(), Error> {
-        let event = StreamEvent::SendFrame(frame);
+        let event = StreamEvent::Frame(frame);
         self.send_event(event)
     }
 
@@ -300,7 +300,7 @@ impl AsyncWrite for StreamHandle {
 
 #[derive(Debug)]
 pub enum StreamEvent {
-    SendFrame(Frame),
+    Frame(Frame),
     StateChanged((StreamId, StreamState)),
     // Flush stream's frames to remote stream, with a channel for sync
     Flush((StreamId, oneshot::Sender<()>))
