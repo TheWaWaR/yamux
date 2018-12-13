@@ -90,12 +90,14 @@ impl StreamHandle {
         Ok(())
     }
 
+    #[inline]
     fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event({:?})", self.id, event);
         // TODO: should handle send error
         self.event_sender.try_send(event).map_err(|_| Error::SessionShutdown)
     }
 
+    #[inline]
     fn send_frame(&mut self, frame: Frame) -> Result<(), Error> {
         let event = StreamEvent::Frame(frame);
         self.send_event(event)
@@ -282,7 +284,8 @@ impl io::Write for StreamHandle {
         if let Err(e) = self.recv_frames() {
             match e {
                 Error::SessionShutdown => return Err(io::ErrorKind::ConnectionAborted.into()),
-                Error::UnexpectedFlag => return Err(io::ErrorKind::InvalidData.into()),
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded => return Err(io::ErrorKind::InvalidData.into()),
                 Error::SubStreamRemoteClosing => (),
                 _ => unimplemented!()
             }
@@ -308,7 +311,8 @@ impl io::Write for StreamHandle {
         if let Err(e) = self.recv_frames() {
             match e {
                 Error::SessionShutdown => return Err(io::ErrorKind::ConnectionAborted.into()),
-                Error::UnexpectedFlag => return Err(io::ErrorKind::InvalidData.into()),
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded => return Err(io::ErrorKind::InvalidData.into()),
                 Error::SubStreamRemoteClosing => (),
                 _ => unimplemented!()
             }
