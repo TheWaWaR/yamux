@@ -197,7 +197,7 @@ where T: AsyncRead + AsyncWrite
             }
         };
         let (frame_sender, frame_receiver) = channel(8);
-        self.streams.insert(stream_id, frame_sender);
+        self.streams.entry(stream_id).or_insert(frame_sender);
         let mut stream = StreamHandle::new(
             stream_id,
             self.event_sender.clone(),

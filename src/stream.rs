@@ -68,15 +68,20 @@ impl StreamHandle {
     fn close(&mut self) -> Result<(), Error> {
         match self.state {
             StreamState::SynSent
-                | StreamState::SynReceived
-                | StreamState::Established =>
-            {
-                self.state = StreamState::LocalClosing;
-                self.send_close()?;
-            }
+            | StreamState::SynReceived
+            | StreamState::Established =>
+                {
+                    self.state = StreamState::LocalClosing;
+                    self.send_close()?;
+                }
             StreamState::RemoteClosing => {
                 self.state = StreamState::Closed;
                 self.send_close()?;
+                let event = StreamEvent::StateChanged((self.id, self.state));
+                self.send_event(event)?;
+            }
+            StreamState::Reset | StreamState::Closed => {
+                self.state = StreamState::Closed;
                 let event = StreamEvent::StateChanged((self.id, self.state));
                 self.send_event(event)?;
             }
@@ -85,12 +90,14 @@ impl StreamHandle {
         Ok(())
     }
 
+    #[inline]
     fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event({:?})", self.id, event);
         // TODO: should handle send error
         self.event_sender.try_send(event).map_err(|_| Error::SessionShutdown)
     }
 
+    #[inline]
     fn send_frame(&mut self, frame: Frame) -> Result<(), Error> {
         let event = StreamEvent::Frame(frame);
         self.send_event(event)
@@ -153,8 +160,7 @@ impl StreamHandle {
         }
 
         if close_stream {
-            let event = StreamEvent::StateChanged((self.id, self.state));
-            self.send_event(event);
+            self.close()?;
         }
         Ok(())
     }
@@ -213,14 +219,12 @@ impl StreamHandle {
     fn recv_frames(&mut self) -> Poll<(), Error> {
         loop {
             match self.state {
-                StreamState::LocalClosing
-                    | StreamState::RemoteClosing
-                    | StreamState::Closed =>
-                {
-                    // TODO: return error
-                }
-                StreamState::Reset => {
-                    // TODO: return error
+                StreamState::RemoteClosing =>
+                    {
+                        return Err(Error::SubStreamRemoteClosing);
+                    }
+                StreamState::Reset | StreamState::Closed => {
+                    return Err(Error::SessionShutdown);
                 }
                 _ => {}
             }
@@ -243,15 +247,16 @@ impl io::Read for StreamHandle {
         // TODO: error handling
         // TODO: check stream state
         match self.state {
-            StreamState::LocalClosing
-                | StreamState::RemoteClosing
-                | StreamState::Closed =>
-            {
-                debug!("closed(EOF)");
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
+            StreamState::RemoteClosing
+            | StreamState::Closed =>
+                {
+                    debug!("closed(EOF)");
+                    let _ = self.close();
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
             StreamState::Reset => {
                 debug!("connection reset");
+                let _ = self.close();
                 return Err(io::ErrorKind::ConnectionReset.into());
             }
             _ => {}
@@ -276,8 +281,18 @@ impl io::Read for StreamHandle {
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         debug!("[{}] StreamHandle.write({:?})", self.id, buf);
-        // TODO: error handling
-        self.recv_frames();
+        if let Err(e) = self.recv_frames() {
+            match e {
+                Error::SessionShutdown => return Err(io::ErrorKind::ConnectionAborted.into()),
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded => return Err(io::ErrorKind::InvalidData.into()),
+                Error::SubStreamRemoteClosing => (),
+                _ => unimplemented!()
+            }
+        }
+        if self.state == StreamState::LocalClosing || self.state == StreamState::Closed {
+            return Err(io::Error::new(io::ErrorKind::Other, "The local is closed and data cannot be written."));
+        }
         if self.send_window == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
         }
@@ -293,14 +308,21 @@ impl io::Write for StreamHandle {
 
     fn flush(&mut self) -> io::Result<()> {
         debug!("[{}] StreamHandle.flush()", self.id);
-        // TODO: error handling
-        self.recv_frames();
+        if let Err(e) = self.recv_frames() {
+            match e {
+                Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded => return Err(io::ErrorKind::InvalidData.into()),
+                Error::SubStreamRemoteClosing => (),
+                _ => unimplemented!()
+            }
+        }
         let (sender, receiver) = oneshot::channel();
         let event = StreamEvent::Flush((self.id, sender));
         match self.send_event(event) {
             Err(_) => Err(io::Error::new(io::ErrorKind::ConnectionReset, "")),
             Ok(()) => {
-                // let _ = receiver.wait();
+                let _ = receiver.wait();
                 Ok(())
             }
         }
