@@ -46,4 +46,7 @@ pub enum Error {
 
     // KeepAliveTimeout is sent if a missed keepalive caused the stream close
     KeepAliveTimeout,
+
+    // Remote sub stream is closed, but local can still send data to remote
+    SubStreamRemoteClosing,
 }
