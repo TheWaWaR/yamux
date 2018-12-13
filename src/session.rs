@@ -273,14 +273,21 @@ where T: AsyncRead + AsyncWrite
         let disconnected = {
             if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
                 // TODO: handle error
-                frame_sender.try_send(frame).is_err()
+                debug!("@> sending frame to stream: {}", stream_id);
+                match frame_sender.try_send(frame) {
+                    Ok(_) => false,
+                    Err(err) => {
+                        warn!("send to stream error: {:?}", err);
+                        true
+                    }
+                }
             } else {
                 // TODO: stream already closed ?
                 false
             }
         };
         if disconnected {
-            debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
+            warn!("[{:?}] !!!!! remove a stream id={}", self.ty, stream_id);
             self.streams.remove(&stream_id);
         }
         Ok(())
@@ -358,9 +365,11 @@ where T: AsyncRead + AsyncWrite
                     _ => {}
                 }
             }
-            StreamEvent::Flush((_stream_id, responsor)) => {
+            StreamEvent::Flush((stream_id, responsor)) => {
+                debug!("[{}] session flushing.....", stream_id);
                 self.flush()?;
                 let _ = responsor.send(());
+                debug!("[{}] session flushed", stream_id);
             }
         }
         Ok(())
@@ -450,6 +459,7 @@ where T: AsyncRead + AsyncWrite
             }
 
             if let Some(stream) = self.pending_streams.pop_front() {
+                debug!("[{:?}] A stream is ready", self.ty);
                 return Ok(Async::Ready(Some(stream)));
             }
 

@@ -1,10 +1,4 @@
 
-extern crate yamux;
-extern crate tokio;
-extern crate futures;
-extern crate env_logger;
-extern crate log;
-
 use std::time::Duration;
 use std::io::{Write, Read};
 use std::thread;
@@ -23,10 +17,13 @@ use log::{error, warn, info, debug, trace};
 
 fn main() {
     env_logger::init();
-    info!("Starting ......");
-    thread::spawn(run_server);
-    thread::sleep(Duration::from_secs(1));
-    run_client();
+    if std::env::args().nth(1) == Some("server".to_string()) {
+        info!("Starting server ......");
+        run_server();
+    } else {
+        info!("Starting client ......");
+        run_client();
+    }
 }
 
 fn run_server() {
@@ -46,19 +43,34 @@ fn run_server() {
             let fut = session
                 .for_each(|stream| {
                     info!("Server accept a stream from client: id={}", stream.id());
-                    tokio_io::read_exact(stream, [0u8; 3])
+                    let fut = tokio_io::read_exact(stream, [0u8; 3])
                         .and_then(|(stream, data)| {
-                            info!("read data: {:?}", data);
+                            info!("[server] read data: {:?}", data);
                             Ok(stream)
                         })
                         .and_then(|mut stream| {
-                            info!("read again: {:?}", stream.read(&mut [0u8; 2]));
+                            info!("[server] send 'def' to remote");
+                            stream.write(b"def").unwrap();
+                            stream.flush().unwrap();
                             Ok(stream)
                         })
-                        .map(|_| ())
+                        .and_then(|stream| {
+                            tokio_io::read_exact(stream, [0u8; 2])
+                                .and_then(|(stream, data)| {
+                                    info!("[server] read again: {:?}", data);
+                                    Ok(stream)
+                                })
+                        })
+                        .map_err(|err| {
+                            error!("server stream error: {:?}", err);
+                            ()
+                        })
+                        .map(|_| ());
+                    tokio::spawn(fut);
+                    Ok(())
                 })
                 .map_err(|err| {
-                    error!("server stream error: {:}", err);
+                    error!("server stream error: {:?}", err);
                     ()
                 });
 
@@ -78,18 +90,20 @@ fn run_client() {
             info!("[client] connected to server: {:?}", sock.peer_addr());
             let mut session = Session::new_client(sock, Config::default());
 
-            match session.open_stream() {
-                Ok(mut stream) => {
-                    info!("[client] send 'abc' to remote");
-                    stream.write(b"abc").unwrap();
-                    info!("[client] shutdown stream id={}", stream.id());
+            let mut stream = session.open_stream().unwrap();
+            info!("[client] send 'abc' to remote");
+            stream.write(b"abc").unwrap();
+
+            info!("[client] reading data");
+            let fut = tokio_io::read_exact(stream, [0u8; 3])
+                .and_then(|(mut stream, data)| {
+                    info!("[client] read data: {:?}", data);
                     stream.shutdown().unwrap();
-                    info!("[client] success open stream: id={}", stream.id());
-                }
-                Err(err) => {
-                    error!("[client] open stream error: {:?}", err);
-                }
-            }
+                    Ok(())
+                })
+                .map_err(|_| ());
+            tokio::spawn(fut);
+
             session
                 .for_each(|stream| {
                     info!("[client] accept a stream from server: id={}", stream.id());

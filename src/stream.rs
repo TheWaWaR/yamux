@@ -257,11 +257,17 @@ impl io::Read for StreamHandle {
             _ => {}
         }
 
-        self.recv_frames();
+        let rv = self.recv_frames();
+        debug!("[{}] StreamHandle.read() recv_frames() => {:?}", self.id, rv);
+
         let n = ::std::cmp::min(buf.len(), self.data_buf.len());
+        if n == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
         let b = self.data_buf.split_to(n);
-        debug!("[{}] StreamHandle.read({})", self.id, n);
-        buf.copy_from_slice(&b);
+        debug!("[{}] StreamHandle.read({}), buf.len()={}, data_buf.len()={}",
+               self.id, n, buf.len(), self.data_buf.len());
+        buf[..n].copy_from_slice(&b);
         self.send_window_update();
         Ok(n)
     }
@@ -276,6 +282,9 @@ impl io::Write for StreamHandle {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
+        if n == 0 {
+            return Ok(n);
+        }
         let data = &buf[0..n];
         self.send_data(data);
         self.send_window -= n as u32;
@@ -291,7 +300,7 @@ impl io::Write for StreamHandle {
         match self.send_event(event) {
             Err(_) => Err(io::Error::new(io::ErrorKind::ConnectionReset, "")),
             Ok(()) => {
-                let _ = receiver.wait();
+                // let _ = receiver.wait();
                 Ok(())
             }
         }
