@@ -310,7 +310,7 @@ impl io::Write for StreamHandle {
         debug!("[{}] StreamHandle.flush()", self.id);
         if let Err(e) = self.recv_frames() {
             match e {
-                Error::SessionShutdown => return Err(io::ErrorKind::ConnectionAborted.into()),
+                Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
                 // read flag error or read data error
                 Error::UnexpectedFlag | Error::RecvWindowExceeded => return Err(io::ErrorKind::InvalidData.into()),
                 Error::SubStreamRemoteClosing => (),
