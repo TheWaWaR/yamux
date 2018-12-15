@@ -167,12 +167,12 @@ impl Flags {
         self.0 ^= flag as u16;
     }
 
-    pub fn contains(&self, flag: Flag) -> bool {
+    pub fn contains(self, flag: Flag) -> bool {
         let flag_value = flag as u16;
         (self.0 & flag_value) == flag_value
     }
 
-    pub fn value(&self) -> u16 {
+    pub fn value(self) -> u16 {
         self.0
     }
 }

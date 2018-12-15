@@ -6,7 +6,7 @@ use futures::{
     sync::oneshot,
     Async, Future, Poll, Stream,
 };
-use log::{debug, trace};
+use log::debug;
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use crate::{
@@ -133,10 +133,8 @@ impl StreamHandle {
     }
 
     fn process_flags(&mut self, flags: Flags) -> Result<(), Error> {
-        if flags.contains(Flag::Ack) {
-            if self.state == StreamState::SynSent {
-                self.state = StreamState::SynReceived;
-            }
+        if flags.contains(Flag::Ack) && self.state == StreamState::SynSent {
+            self.state = StreamState::SynReceived;
         }
         let mut close_stream = false;
         if flags.contains(Flag::Fin) {
@@ -183,7 +181,7 @@ impl StreamHandle {
         debug!("[{}] StreamHandle.handle_frame({:?})", self.id, frame);
         match frame.ty() {
             Type::WindowUpdate => {
-                self.handle_window_update(frame)?;
+                self.handle_window_update(&frame)?;
             }
             Type::Data => {
                 self.handle_data(frame)?;
@@ -195,7 +193,7 @@ impl StreamHandle {
         Ok(())
     }
 
-    fn handle_window_update(&mut self, frame: Frame) -> Result<(), Error> {
+    fn handle_window_update(&mut self, frame: &Frame) -> Result<(), Error> {
         self.process_flags(frame.flags())?;
         self.send_window += frame.length();
         Ok(())
@@ -282,7 +280,7 @@ impl io::Read for StreamHandle {
             self.data_buf.len()
         );
         buf[..n].copy_from_slice(&b);
-        self.send_window_update();
+        self.send_window_update().unwrap();
         Ok(n)
     }
 }
@@ -315,7 +313,7 @@ impl io::Write for StreamHandle {
             return Ok(n);
         }
         let data = &buf[0..n];
-        self.send_data(data);
+        self.send_data(data).unwrap();
         self.send_window -= n as u32;
         Ok(n)
     }
@@ -350,7 +348,7 @@ impl AsyncRead for StreamHandle {}
 impl AsyncWrite for StreamHandle {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        self.close();
+        self.close().unwrap();
         Ok(Async::Ready(()))
     }
 }

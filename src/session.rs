@@ -5,9 +5,9 @@ use std::time::Instant;
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     sync::mpsc::{channel, Receiver, Sender},
-    task, try_ready, Async, AsyncSink, Poll, Sink, Stream,
+    try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
-use log::{debug, error, info, trace, warn};
+use log::{debug, warn};
 use tokio_codec::Framed;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_timer::Interval;
@@ -237,10 +237,10 @@ where
                 self.handle_stream_message(frame)?;
             }
             Type::Ping => {
-                self.handle_ping(frame)?;
+                self.handle_ping(&frame)?;
             }
             Type::GoAway => {
-                self.handle_go_away(frame);
+                self.handle_go_away(&frame);
             }
         }
         Ok(())
@@ -288,7 +288,7 @@ where
         Ok(())
     }
 
-    fn handle_ping(&mut self, frame: Frame) -> Result<(), io::Error> {
+    fn handle_ping(&mut self, frame: &Frame) -> Result<(), io::Error> {
         let flags = frame.flags();
         if flags.contains(Flag::Syn) {
             // Send ping back
@@ -301,7 +301,7 @@ where
         Ok(())
     }
 
-    fn handle_go_away(&mut self, frame: Frame) {
+    fn handle_go_away(&mut self, frame: &Frame) {
         match GoAwayCode::from(frame.length()) {
             GoAwayCode::Normal => {
                 self.remote_go_away = true;
