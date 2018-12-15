@@ -1,3 +1,5 @@
+//! The substream, the main interface is AsyncRead/AsyncWrite
+
 use std::io;
 
 use bytes::{Bytes, BytesMut};
@@ -15,6 +17,7 @@ use crate::{
     StreamId,
 };
 
+/// The substream
 pub struct StreamHandle {
     id: StreamId,
     state: StreamState,
@@ -33,7 +36,8 @@ pub struct StreamHandle {
 }
 
 impl StreamHandle {
-    pub fn new(
+    // Create a StreamHandle from session
+    pub(crate) fn new(
         id: StreamId,
         event_sender: Sender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
@@ -54,15 +58,19 @@ impl StreamHandle {
         }
     }
 
+    /// Get the stream id
     pub fn id(&self) -> StreamId {
         self.id
     }
+    /// Get the stream state
     pub fn state(&self) -> StreamState {
         self.state
     }
+    /// Get the receive window size
     pub fn recv_window(&self) -> u32 {
         self.recv_window
     }
+    /// Get the send window size
     pub fn send_window(&self) -> u32 {
         self.send_window
     }
@@ -104,7 +112,8 @@ impl StreamHandle {
         self.send_event(event)
     }
 
-    pub fn send_window_update(&mut self) -> Result<(), Error> {
+    // Send a window update
+    pub(crate) fn send_window_update(&mut self) -> Result<(), Error> {
         let buf_len = self.data_buf.len() as u32;
         let delta = self.max_recv_window - buf_len - self.recv_window;
 
@@ -353,22 +362,32 @@ impl AsyncWrite for StreamHandle {
     }
 }
 
+// Stream event
 #[derive(Debug)]
-pub enum StreamEvent {
+pub(crate) enum StreamEvent {
     Frame(Frame),
     StateChanged((StreamId, StreamState)),
     // Flush stream's frames to remote stream, with a channel for sync
     Flush((StreamId, oneshot::Sender<()>)),
 }
 
+/// The stream state
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum StreamState {
+    /// Just created
     Init,
+    /// We sent a Syn message
     SynSent,
+    /// We received a Syn message
     SynReceived,
+    /// Stream established
     Established,
+    /// We closed the stream
     LocalClosing,
+    /// Remote closed the stream
     RemoteClosing,
+    /// Both side of the stream closed
     Closed,
+    /// Stream rejected by remote
     Reset,
 }

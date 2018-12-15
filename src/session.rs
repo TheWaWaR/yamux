@@ -1,3 +1,5 @@
+//! The session, can open and manage substreams
+
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::time::Instant;
@@ -20,6 +22,7 @@ use crate::{
     StreamId,
 };
 
+/// The session
 pub struct Session<T> {
     // Framed low level raw stream
     framed_stream: Framed<T, FrameCodec>,
@@ -67,9 +70,12 @@ pub struct Session<T> {
     keepalive_future: Option<Interval>,
 }
 
+/// Session type, client or server
 #[derive(Debug)]
 pub enum SessionType {
+    /// The session is a client
     Client,
+    /// The session is a server (typical low level stream is an accepted TcpStream)
     Server,
 }
 
@@ -77,6 +83,7 @@ impl<T> Session<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    /// Create a new session from a low level stream
     pub fn new(raw_stream: T, config: Config, ty: SessionType) -> Session<T> {
         let next_stream_id = match ty {
             SessionType::Client => 1,
@@ -111,16 +118,18 @@ where
         }
     }
 
+    /// Create a server session (typical raw_stream is an accepted TcpStream)
     pub fn new_server(raw_stream: T, config: Config) -> Session<T> {
         Self::new(raw_stream, config, SessionType::Server)
     }
 
+    /// Create a client session
     pub fn new_client(raw_stream: T, config: Config) -> Session<T> {
         Self::new(raw_stream, config, SessionType::Client)
     }
 
-    // shutdown is used to close the session and all streams.
-    // Attempts to send a GoAway before closing the connection.
+    /// shutdown is used to close the session and all streams.
+    /// Attempts to send a GoAway before closing the connection.
     pub fn shutdown(&mut self) -> Poll<(), io::Error> {
         if self.shutdown {
             return Ok(Async::Ready(()));
@@ -152,14 +161,15 @@ where
         self.send_frame(frame).map(|_| Async::Ready(ping_id))
     }
 
-    // GoAway can be used to prevent accepting further
-    // connections. It does not close the underlying conn.
+    /// GoAway can be used to prevent accepting further
+    /// connections. It does not close the underlying conn.
     pub fn send_go_away(&mut self) -> Poll<(), io::Error> {
         self.local_go_away = true;
         let frame = Frame::new_go_away(GoAwayCode::Normal);
         self.send_frame(frame)
     }
 
+    /// Open a new stream to remote session
     pub fn open_stream(&mut self) -> Result<StreamHandle, Error> {
         if self.is_dead() {
             Err(Error::SessionShutdown)

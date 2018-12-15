@@ -1,3 +1,5 @@
+//! Process the frame
+
 use std::io;
 
 use byteorder::{BigEndian, ByteOrder};
@@ -8,6 +10,7 @@ use tokio_codec::{Decoder, Encoder};
 use crate::{StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID};
 
 // TODO remove Clone later
+/// The base message type is frame
 #[derive(Debug)]
 pub struct Frame {
     header: Header,
@@ -15,6 +18,7 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Create a data frame
     pub fn new_data(flags: Flags, stream_id: StreamId, body: Bytes) -> Frame {
         Frame {
             header: Header {
@@ -28,6 +32,7 @@ impl Frame {
         }
     }
 
+    /// Create a window update frame
     pub fn new_window_update(flags: Flags, stream_id: StreamId, delta: u32) -> Frame {
         Frame {
             header: Header {
@@ -41,6 +46,7 @@ impl Frame {
         }
     }
 
+    /// Create a ping frame
     pub fn new_ping(flags: Flags, ping_id: u32) -> Frame {
         Frame {
             header: Header {
@@ -54,6 +60,7 @@ impl Frame {
         }
     }
 
+    /// Create a go away frame
     pub fn new_go_away(reason: GoAwayCode) -> Frame {
         Frame {
             header: Header {
@@ -67,27 +74,33 @@ impl Frame {
         }
     }
 
+    /// The type of current frame
     pub fn ty(&self) -> Type {
         self.header.ty
     }
 
+    /// The stream id of current frame
     pub fn stream_id(&self) -> StreamId {
         self.header.stream_id
     }
 
+    /// The flags of current frame
     pub fn flags(&self) -> Flags {
         self.header.flags
     }
 
+    /// The length field of current frame
     pub fn length(&self) -> u32 {
         self.header.length
     }
 
+    /// Consume current frame split into header and body
     pub fn into_parts(self) -> (Header, Option<Bytes>) {
         (self.header, self.body)
     }
 }
 
+/// The frame header
 #[derive(Clone, Debug)]
 pub struct Header {
     version: u8,
@@ -97,26 +110,29 @@ pub struct Header {
     length: u32,
 }
 
-// The type field is used to switch the frame message type.
-// The following message types are supported:
+/// The type field is used to switch the frame message type.
+/// The following message types are supported:
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Type {
-    // Used to transmit data.
-    // May transmit zero length payloads depending on the flags.
+    /// Used to transmit data.
+    /// May transmit zero length payloads depending on the flags.
     Data = 0x0,
-    // Used to updated the senders receive window size.
-    // This is used to implement per-session flow control.
+
+    /// Used to updated the senders receive window size.
+    /// This is used to implement per-session flow control.
     WindowUpdate = 0x1,
-    // Used to measure RTT.
-    // It can also be used to heart-beat and do keep-alives over TCP.
+
+    /// Used to measure RTT.
+    /// It can also be used to heart-beat and do keep-alives over TCP.
     Ping = 0x2,
-    // Used to close a session.
+
+    /// Used to close a session.
     GoAway = 0x3,
 }
 
 impl Type {
-    pub fn try_from(value: u8) -> Option<Type> {
+    pub(crate) fn try_from(value: u8) -> Option<Type> {
         match value {
             0x0 => Some(Type::Data),
             0x1 => Some(Type::WindowUpdate),
@@ -127,25 +143,26 @@ impl Type {
     }
 }
 
+/// The frame flag
 #[derive(Copy, Clone, Debug)]
 #[repr(u16)]
 pub enum Flag {
-    // SYN - Signals the start of a new stream.
-    //   May be sent with a data or window update message.
-    //   Also sent with a ping to indicate outbound.
+    /// SYN - Signals the start of a new stream.
+    ///   May be sent with a data or window update message.
+    ///   Also sent with a ping to indicate outbound.
     Syn = 0x1,
 
-    // ACK - Acknowledges the start of a new stream.
-    //   May be sent with a data or window update message.
-    //   Also sent with a ping to indicate response.
+    /// ACK - Acknowledges the start of a new stream.
+    ///   May be sent with a data or window update message.
+    ///   Also sent with a ping to indicate response.
     Ack = 0x2,
 
-    // FIN (finish?) - Performs a half-close of a stream.
-    //   May be sent with a data message or window update.
+    /// FIN (finish) - Performs a half-close of a stream.
+    ///   May be sent with a data message or window update.
     Fin = 0x4,
 
-    // RST - Reset a stream immediately.
-    //   May be sent with a data or window update message.
+    /// RST - Reset a stream immediately.
+    ///   May be sent with a data or window update message.
     Rst = 0x8,
 }
 
@@ -155,39 +172,44 @@ impl From<Flag> for Flags {
     }
 }
 
+/// Represent all flags of a frame
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Flags(u16);
 
 impl Flags {
+    /// Add a flag
     pub fn add(&mut self, flag: Flag) {
         self.0 |= flag as u16;
     }
 
+    /// Remove a flag
     pub fn remove(&mut self, flag: Flag) {
         self.0 ^= flag as u16;
     }
 
+    /// Check if contains a target flag
     pub fn contains(self, flag: Flag) -> bool {
         let flag_value = flag as u16;
         (self.0 & flag_value) == flag_value
     }
 
+    /// The value of all flags
     pub fn value(self) -> u16 {
         self.0
     }
 }
 
-// When a session is being terminated, the Go Away message should
-// be sent. The Length should be set to one of the following to
-// provide an error code:
+/// When a session is being terminated, the Go Away message should
+/// be sent. The Length should be set to one of the following to
+/// provide an error code:
 #[derive(Copy, Clone, Debug)]
 #[repr(u32)]
 pub enum GoAwayCode {
-    // Normal termination
+    /// Normal termination
     Normal = 0x0,
-    // Protocol error
+    /// Protocol error
     ProtocolError = 0x1,
-    // Internal error
+    /// Internal error
     InternalError = 0x2,
 }
 
@@ -202,8 +224,9 @@ impl From<u32> for GoAwayCode {
     }
 }
 
+/// The frame decoder/encoder
 #[derive(Default)]
-pub struct FrameCodec {
+pub(crate) struct FrameCodec {
     unused_data_header: Option<Header>,
 }
 
