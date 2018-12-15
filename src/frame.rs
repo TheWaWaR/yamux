@@ -1,16 +1,11 @@
 use std::io;
 
-use bytes::{Bytes, BytesMut, BufMut};
 use byteorder::{BigEndian, ByteOrder};
-use tokio_codec::{Encoder, Decoder};
-use log::{trace};
+use bytes::{BufMut, Bytes, BytesMut};
+use log::trace;
+use tokio_codec::{Decoder, Encoder};
 
-use crate::{
-    PROTOCOL_VERSION,
-    RESERVED_STREAM_ID,
-    HEADER_SIZE,
-    StreamId,
-};
+use crate::{StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID};
 
 // TODO remove Clone later
 #[derive(Debug)]
@@ -151,7 +146,7 @@ pub enum Flag {
 
     // RST - Reset a stream immediately.
     //   May be sent with a data or window update message.
-    Rst = 0x8
+    Rst = 0x8,
 }
 
 impl From<Flag> for Flags {
@@ -216,10 +211,7 @@ impl Decoder for FrameCodec {
     type Item = Frame;
     type Error = io::Error;
 
-    fn decode(
-        &mut self,
-        src: &mut BytesMut
-    ) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if src.is_empty() {
             return Ok(None);
         }
@@ -265,7 +257,7 @@ impl Decoder for FrameCodec {
             }
         };
 
-        let body = if header.ty == Type::Data  {
+        let body = if header.ty == Type::Data {
             if src.len() < header.length as usize {
                 trace!("not enough data for decode body");
                 self.unused_data_header = Some(header);
@@ -285,11 +277,7 @@ impl Decoder for FrameCodec {
 impl Encoder for FrameCodec {
     type Item = Frame;
     type Error = io::Error;
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut BytesMut
-    ) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let (header, body) = item.into_parts();
         dst.put(header.version);
         dst.put(header.ty as u8);

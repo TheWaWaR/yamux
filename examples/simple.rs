@@ -1,19 +1,14 @@
-
-use std::time::Duration;
-use std::io::{Write, Read};
+use std::io::{Read, Write};
 use std::thread;
+use std::time::Duration;
 
-use yamux::{
-    config::Config,
-    session::Session,
-    stream::StreamHandle,
-};
-use futures::Stream;
 use futures::Future;
-use tokio::io::{copy, AsyncRead, AsyncWrite};
+use futures::Stream;
+use log::{debug, error, info, trace, warn};
 use tokio::io as tokio_io;
+use tokio::io::{copy, AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use log::{error, warn, info, debug, trace};
+use yamux::{config::Config, session::Session, stream::StreamHandle};
 
 fn main() {
     env_logger::init();
@@ -27,13 +22,13 @@ fn main() {
 }
 
 fn run_server() {
-   // Bind the server's socket.
+    // Bind the server's socket.
     let addr = "127.0.0.1:12345".parse().unwrap();
-    let listener = TcpListener::bind(&addr)
-        .expect("unable to bind TCP listener");
+    let listener = TcpListener::bind(&addr).expect("unable to bind TCP listener");
 
     // Pull out a stream of sockets for incoming connections
-    let server = listener.incoming()
+    let server = listener
+        .incoming()
         .map_err(|e| eprintln!("accept failed = {:?}", e))
         .for_each(|sock| {
             info!("accepted a socket: {:?}", sock.peer_addr());
@@ -55,11 +50,10 @@ fn run_server() {
                             Ok(stream)
                         })
                         .and_then(|stream| {
-                            tokio_io::read_exact(stream, [0u8; 2])
-                                .and_then(|(stream, data)| {
-                                    info!("[server] read again: {:?}", data);
-                                    Ok(stream)
-                                })
+                            tokio_io::read_exact(stream, [0u8; 2]).and_then(|(stream, data)| {
+                                info!("[server] read again: {:?}", data);
+                                Ok(stream)
+                            })
                         })
                         .map_err(|err| {
                             error!("server stream error: {:?}", err);
@@ -104,11 +98,10 @@ fn run_client() {
                 .map_err(|_| ());
             tokio::spawn(fut);
 
-            session
-                .for_each(|stream| {
-                    info!("[client] accept a stream from server: id={}", stream.id());
-                    Ok(())
-                })
+            session.for_each(|stream| {
+                info!("[client] accept a stream from server: id={}", stream.id());
+                Ok(())
+            })
         })
         .map_err(|err| {
             error!("[client] error: {:?}", err);

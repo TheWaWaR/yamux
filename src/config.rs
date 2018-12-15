@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 // Both sides assume the initial 256KB window size

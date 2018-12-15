@@ -1,31 +1,24 @@
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::time::Instant;
-use std::collections::{VecDeque, BTreeMap};
 
-use log::{error, warn, info, debug, trace};
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
-    try_ready,
-    task,
-    Async,
-    AsyncSink,
-    Poll,
-    Sink,
-    Stream,
-    sync::mpsc::{channel, Sender, Receiver},
+    sync::mpsc::{channel, Receiver, Sender},
+    task, try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
+use log::{debug, error, info, trace, warn};
+use tokio_codec::Framed;
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_codec::{Framed};
 use tokio_timer::Interval;
 
 use crate::{
-    StreamId,
-    error::Error,
     config::Config,
-    stream::{StreamHandle, StreamEvent, StreamState},
-    frame::{Frame, Type, Flags, Flag, GoAwayCode, FrameCodec},
+    error::Error,
+    frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
+    stream::{StreamEvent, StreamHandle, StreamState},
+    StreamId,
 };
-
 
 pub struct Session<T> {
     // Framed low level raw stream
@@ -34,7 +27,7 @@ pub struct Session<T> {
     // Got EOF from low level raw stream
     eof: bool,
 
-	  // shutdown is used to safely close a session
+    // shutdown is used to safely close a session
     shutdown: bool,
 
     // remoteGoAway indicates the remote side does
@@ -81,7 +74,8 @@ pub enum SessionType {
 }
 
 impl<T> Session<T>
-where T: AsyncRead + AsyncWrite
+where
+    T: AsyncRead + AsyncWrite,
 {
     pub fn new(raw_stream: T, config: Config, ty: SessionType) -> Session<T> {
         let next_stream_id = match ty {
@@ -127,7 +121,7 @@ where T: AsyncRead + AsyncWrite
 
     // shutdown is used to close the session and all streams.
     // Attempts to send a GoAway before closing the connection.
-    pub fn shutdown(&mut self) -> Poll<(), io::Error>{
+    pub fn shutdown(&mut self) -> Poll<(), io::Error> {
         if self.shutdown {
             return Ok(Async::Ready(()));
         }
@@ -160,7 +154,7 @@ where T: AsyncRead + AsyncWrite
 
     // GoAway can be used to prevent accepting further
     // connections. It does not close the underlying conn.
-    pub fn send_go_away(&mut self) -> Poll<(), io::Error>{
+    pub fn send_go_away(&mut self) -> Poll<(), io::Error> {
         self.local_go_away = true;
         let frame = Frame::new_go_away(GoAwayCode::Normal);
         self.send_frame(frame)
@@ -187,9 +181,7 @@ where T: AsyncRead + AsyncWrite
 
     fn create_stream(&mut self, stream_id: Option<StreamId>) -> StreamHandle {
         let (stream_id, state) = match stream_id {
-            Some(stream_id) => {
-                (stream_id, StreamState::SynReceived)
-            }
+            Some(stream_id) => (stream_id, StreamState::SynReceived),
             None => {
                 let next_id = self.next_stream_id;
                 self.next_stream_id += 2;
@@ -224,9 +216,9 @@ where T: AsyncRead + AsyncWrite
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.pending_frames.push_front(frame);
-                    return Ok(Async::NotReady)
+                    return Ok(Async::NotReady);
                 }
-                Ok(AsyncSink::Ready) => {},
+                Ok(AsyncSink::Ready) => {}
                 Err(err) => {
                     debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
                     return Err(err);
@@ -262,7 +254,10 @@ where T: AsyncRead + AsyncWrite
                 let flags = Flags::from(Flag::Rst);
                 let frame = Frame::new_window_update(flags, stream_id, 0);
                 self.send_frame(frame)?;
-                debug!("[{:?}] local go away send Reset to remote stream_id={}", self.ty, stream_id);
+                debug!(
+                    "[{:?}] local go away send Reset to remote stream_id={}",
+                    self.ty, stream_id
+                );
                 // TODO: should report error?
                 return Ok(());
             }
@@ -377,7 +372,7 @@ where T: AsyncRead + AsyncWrite
 
     // Receive events from sub streams
     // TODO: should handle error
-    fn recv_events(&mut self) -> Poll<(), io::Error>{
+    fn recv_events(&mut self) -> Poll<(), io::Error> {
         loop {
             if self.is_dead() {
                 return Ok(Async::Ready(()));
@@ -392,18 +387,18 @@ where T: AsyncRead + AsyncWrite
                 }
                 Ok(Async::NotReady) => {
                     return Ok(Async::NotReady);
-                },
+                }
                 Err(()) => {
                     // TODO: When would happend?
-                },
+                }
             }
         }
     }
 }
 
-
 impl<T> Stream for Session<T>
-where T: AsyncRead + AsyncWrite
+where
+    T: AsyncRead + AsyncWrite,
 {
     type Item = StreamHandle;
     type Error = io::Error;
@@ -428,8 +423,8 @@ where T: AsyncRead + AsyncWrite
                     Ok(Async::NotReady) => {
                         keep_alive_not_ready = true;
                         None
-                    },
-                    Err(_) => None
+                    }
+                    Err(_) => None,
                 }
             } else {
                 None
@@ -440,10 +435,13 @@ where T: AsyncRead + AsyncWrite
                     keep_alive_not_ready = true;
                 }
             }
-            debug!("[{:?}] keep_alive_not_ready = {}", self.ty, keep_alive_not_ready);
+            debug!(
+                "[{:?}] keep_alive_not_ready = {}",
+                self.ty, keep_alive_not_ready
+            );
 
             match self.recv_frames()? {
-                Async::Ready(_) => {},
+                Async::Ready(_) => {}
                 Async::NotReady => {
                     debug!("[{:?}] recv_frames NotReady", self.ty);
                     recv_frames_not_ready = true;
@@ -451,7 +449,7 @@ where T: AsyncRead + AsyncWrite
             }
             // Ignore Async::NotReady from recv_events()
             match self.recv_events()? {
-                Async::Ready(_) => {},
+                Async::Ready(_) => {}
                 Async::NotReady => {
                     debug!("[{:?}] recv_events NotReady", self.ty);
                     recv_events_not_ready = true;
@@ -463,13 +461,9 @@ where T: AsyncRead + AsyncWrite
                 return Ok(Async::Ready(Some(stream)));
             }
 
-            if keep_alive_not_ready
-                || recv_frames_not_ready
-                || recv_events_not_ready
-            {
+            if keep_alive_not_ready || recv_frames_not_ready || recv_events_not_ready {
                 return Ok(Async::NotReady);
             }
-
         }
     }
 }
