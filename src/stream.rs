@@ -289,7 +289,9 @@ impl io::Read for StreamHandle {
             self.data_buf.len()
         );
         buf[..n].copy_from_slice(&b);
-        self.send_window_update().unwrap();
+        if self.send_window_update().is_err() {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
         Ok(n)
     }
 }
@@ -299,7 +301,7 @@ impl io::Write for StreamHandle {
         debug!("[{}] StreamHandle.write({:?})", self.id, buf);
         if let Err(e) = self.recv_frames() {
             match e {
-                Error::SessionShutdown => return Err(io::ErrorKind::ConnectionAborted.into()),
+                Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
                 // read flag error or read data error
                 Error::UnexpectedFlag | Error::RecvWindowExceeded => {
                     return Err(io::ErrorKind::InvalidData.into())
@@ -310,19 +312,19 @@ impl io::Write for StreamHandle {
         }
         if self.state == StreamState::LocalClosing || self.state == StreamState::Closed {
             return Err(io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::BrokenPipe,
                 "The local is closed and data cannot be written.",
             ));
         }
         if self.send_window == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
         }
+        // Allow n = 0, send an empty frame to remote
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
-        if n == 0 {
-            return Ok(n);
-        }
         let data = &buf[0..n];
-        self.send_data(data).unwrap();
+        if self.send_data(data).is_err() {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
         self.send_window -= n as u32;
         Ok(n)
     }
@@ -343,7 +345,7 @@ impl io::Write for StreamHandle {
         let (sender, receiver) = oneshot::channel();
         let event = StreamEvent::Flush((self.id, sender));
         match self.send_event(event) {
-            Err(_) => Err(io::Error::new(io::ErrorKind::ConnectionReset, "")),
+            Err(_) => Err(io::ErrorKind::BrokenPipe.into()),
             Ok(()) => {
                 let _ = receiver.wait();
                 Ok(())
@@ -357,7 +359,9 @@ impl AsyncRead for StreamHandle {}
 impl AsyncWrite for StreamHandle {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        self.close().unwrap();
+        if self.close().is_err() {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
         Ok(Async::Ready(()))
     }
 }
