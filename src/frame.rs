@@ -89,7 +89,7 @@ impl Frame {
         self.header.flags
     }
 
-    /// The length field of current frame
+    /// The length field of current body or some other things such as ping_id/go away code/delta
     pub fn length(&self) -> u32 {
         self.header.length
     }
@@ -97,6 +97,15 @@ impl Frame {
     /// Consume current frame split into header and body
     pub fn into_parts(self) -> (Header, Option<Bytes>) {
         (self.header, self.body)
+    }
+
+    /// The length field of current frame
+    pub fn size(&self) -> usize {
+        if self.body.is_some() {
+            self.header.length as usize + HEADER_SIZE
+        } else {
+            HEADER_SIZE
+        }
     }
 }
 
@@ -302,7 +311,7 @@ impl Encoder for FrameCodec {
     type Error = io::Error;
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // Must ensure that there is enough space in the buf
-        dst.reserve(item.length() as usize + HEADER_SIZE);
+        dst.reserve(item.size());
         let (header, body) = item.into_parts();
         dst.put(header.version);
         dst.put(header.ty as u8);
