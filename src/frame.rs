@@ -301,6 +301,8 @@ impl Encoder for FrameCodec {
     type Item = Frame;
     type Error = io::Error;
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        // Must ensure that there is enough space in the buf
+        dst.reserve(item.length() as usize + HEADER_SIZE);
         let (header, body) = item.into_parts();
         dst.put(header.version);
         dst.put(header.ty as u8);
