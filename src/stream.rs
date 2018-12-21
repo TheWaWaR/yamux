@@ -272,9 +272,23 @@ impl io::Read for StreamHandle {
 
         let rv = self.recv_frames();
         debug!(
-            "[{}] StreamHandle.read() recv_frames() => {:?}",
-            self.id, rv
+            "[{}] StreamHandle.read() recv_frames() => {:?}, state: {:?}",
+            self.id, rv, self.state
         );
+
+        match self.state {
+            StreamState::RemoteClosing | StreamState::Closed => {
+                debug!("closed(EOF)");
+                let _ = self.close();
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            StreamState::Reset => {
+                debug!("connection reset");
+                let _ = self.close();
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
+            _ => {}
+        }
 
         let n = ::std::cmp::min(buf.len(), self.data_buf.len());
         if n == 0 {
