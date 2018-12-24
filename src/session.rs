@@ -10,9 +10,9 @@ use futures::{
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
 use log::{debug, warn};
-use tokio_codec::Framed;
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_timer::Interval;
+use tokio::codec::Framed;
+use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::timer::Interval;
 
 use crate::{
     config::Config,
@@ -71,7 +71,7 @@ pub struct Session<T> {
 }
 
 /// Session type, client or server
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum SessionType {
     /// The session is a client
     Client,

@@ -9,7 +9,7 @@ use futures::{
     Async, Future, Poll, Stream,
 };
 use log::debug;
-use tokio_io::{AsyncRead, AsyncWrite};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     error::Error,
